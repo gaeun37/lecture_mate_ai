@@ -787,7 +787,6 @@ def summary_json_to_markdown(summary_json: Dict[str, Any]) -> str:
     full_summary = summary_json.get("full_summary", [])
     key_concepts = summary_json.get("key_concepts", [])
     exam_points = summary_json.get("exam_points", [])
-    source_pages = summary_json.get("source_pages", [])
 
     if not isinstance(full_summary, list):
         full_summary = [str(full_summary)]
@@ -797,9 +796,6 @@ def summary_json_to_markdown(summary_json: Dict[str, Any]) -> str:
 
     if not isinstance(exam_points, list):
         exam_points = [str(exam_points)]
-
-    if not isinstance(source_pages, list):
-        source_pages = [source_pages]
 
     md = ""
 
@@ -824,22 +820,7 @@ def summary_json_to_markdown(summary_json: Dict[str, Any]) -> str:
         if item:
             md += f"- {item}\n"
 
-    md += "\n## 5. 근거 페이지\n"
-    cleaned_pages = []
-
-    for page in source_pages:
-        try:
-            cleaned_pages.append(int(page))
-        except Exception:
-            continue
-
-    if cleaned_pages:
-        md += "- " + ", ".join(str(p) for p in sorted(set(cleaned_pages))) + "\n"
-    else:
-        md += "- 근거 페이지를 확인하지 못했습니다.\n"
-
     return md.strip()
-
 
 def generate_document_summary_with_ollama(
     ollama_url: str,
@@ -897,8 +878,7 @@ def generate_document_summary_with_ollama(
     "PDF 본문을 바탕으로 시험에 나올 수 있는 포인트 1",
     "PDF 본문을 바탕으로 시험에 나올 수 있는 포인트 2",
     "PDF 본문을 바탕으로 시험에 나올 수 있는 포인트 3"
-  ],
-  "source_pages": [1]
+  ]
 }}
 """.strip()
 
