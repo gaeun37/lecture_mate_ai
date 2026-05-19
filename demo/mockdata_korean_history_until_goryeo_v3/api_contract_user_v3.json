@@ -1,0 +1,11 @@
+{
+  "version": "korean-history-until-goryeo-v3",
+  "required_rules": [
+    "모든 주요 데이터에는 user_id를 포함한다.",
+    "RAG 검색 결과 chunk에는 user_id, material_id, file_name, page, text가 반드시 포함되어야 한다.",
+    "AI 튜터 답변, 문제, 플래시카드에는 source.file_name, source.page, source.evidence를 포함한다.",
+    "C 담당 기능은 attempts, wrong_notes, weak_concepts, study_plan을 user_id 기준으로 필터링한다.",
+    "MVP에서는 로그인 없이 user_id=1로 고정한다.",
+    "본 데모는 한국사.zip 중 고조선~후삼국 관련 PDF를 선별해 구성한다."
+  ]
+}

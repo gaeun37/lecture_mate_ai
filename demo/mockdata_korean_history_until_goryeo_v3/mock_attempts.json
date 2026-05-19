@@ -1,0 +1,55 @@
+{
+  "user_id": 1,
+  "attempts": [
+    {
+      "attempt_id": 1,
+      "user_id": 1,
+      "question_id": 1,
+      "selected_answer": "철기 문화",
+      "correct_answer": "청동기 문화",
+      "is_correct": false,
+      "concept": "고조선의 성립",
+      "elapsed_time": 41
+    },
+    {
+      "attempt_id": 2,
+      "user_id": 1,
+      "question_id": 2,
+      "selected_answer": "백제의 침입으로 국토 수호의 위기의식이 높아졌다.",
+      "correct_answer": "백제의 침입으로 국토 수호의 위기의식이 높아졌다.",
+      "is_correct": true,
+      "concept": "신라의 삼국통일 과정",
+      "elapsed_time": 33
+    },
+    {
+      "attempt_id": 3,
+      "user_id": 1,
+      "question_id": 3,
+      "selected_answer": "모든 유민이 한 지역에 모여 즉시 발해를 세웠다.",
+      "correct_answer": "당에 강제 이주되거나 신라로 넘어가는 등 여러 갈래로 흩어졌다.",
+      "is_correct": false,
+      "concept": "고구려 유민의 동향",
+      "elapsed_time": 46
+    },
+    {
+      "attempt_id": 4,
+      "user_id": 1,
+      "question_id": 4,
+      "selected_answer": "견훤과 궁예가 각각 후백제와 후고구려를 세웠다.",
+      "correct_answer": "견훤과 궁예가 각각 후백제와 후고구려를 세웠다.",
+      "is_correct": true,
+      "concept": "후삼국의 정립",
+      "elapsed_time": 27
+    },
+    {
+      "attempt_id": 5,
+      "user_id": 1,
+      "question_id": 5,
+      "selected_answer": "900년에 후백제를 세웠다.",
+      "correct_answer": "918년 궁예가 추방된 뒤 추대를 받아 왕위에 올라 고려를 개창하였다.",
+      "is_correct": false,
+      "concept": "고려의 개창",
+      "elapsed_time": 51
+    }
+  ]
+}
