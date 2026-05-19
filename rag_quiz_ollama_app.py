@@ -1629,11 +1629,7 @@ try:
 
         st.markdown("### 정답")
         st.success(quiz.get("answer", ""))
-        
-        if quiz.get("grading_criteria"):
-            st.markdown("### 채점 기준")
-            for idx, item in enumerate(quiz.get("grading_criteria", []), start=1):
-                st.write(f"{idx}. {item}")
+    
 
         if quiz.get("grading_criteria"):
             st.markdown("### 채점 기준")
