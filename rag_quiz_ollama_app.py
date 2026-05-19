@@ -460,10 +460,86 @@ def build_quiz_prompt(
 """
     }.get(question_intent, "")
 
+    # 문제 유형 분기
+    is_fill_blank = "빈칸" in question_type or "주관식" in question_type
+
+    if is_fill_blank:
+        type_rule = """
+[문제 유형별 규칙]
+- 빈칸 주관식 문제를 만든다.
+- question에는 반드시 빈칸 표시 "_____"를 정확히 한 번 포함한다.
+- answer에는 빈칸에 들어갈 정답 단어 또는 짧은 구절만 작성한다.
+- answer는 30자 이내로 작성한다.
+- choices는 반드시 빈 리스트 []로 둔다.
+- choice_explanations도 반드시 빈 리스트 []로 둔다.
+- grading_criteria에는 채점 기준 3개를 작성한다.
+- 빈칸에는 교안 근거에 실제로 등장하거나, 교안 근거에서 직접 확인 가능한 핵심 용어가 들어가야 한다.
+- 질문은 단순 암기가 아니라 핵심 개념 이해를 확인할 수 있게 작성한다.
+- 정답을 문장 전체로 쓰지 말고, 빈칸에 들어갈 단어 또는 짧은 구절만 작성한다.
+"""
+
+        output_format = f"""
+[출력 형식]
+{{
+  "question_type": "fill_blank",
+  "question_polarity": "positive",
+  "question": "빈칸 _____ 이 포함된 질문 한 문장",
+  "choices": [],
+  "answer": "빈칸에 들어갈 정답 단어 또는 짧은 구절",
+  "part_summary": "출제 파트 요약",
+  "evidence_text": "정답 근거",
+  "explanation": "정답이 빈칸에 들어가야 하는 이유",
+  "choice_explanations": [],
+  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
+  "concept": "핵심 개념",
+  "difficulty": {level_num},
+  "hint": "정답을 직접 말하지 않는 짧은 힌트 한 문장",
+  "grading_criteria": [
+    "빈칸에 핵심 용어를 정확히 작성했는가",
+    "교안 근거의 의미와 맞는 답을 작성했는가",
+    "유사 표현을 쓰더라도 핵심 개념이 유지되는가"
+  ]
+}}
+"""
+    else:
+        type_rule = """
+[문제 유형별 규칙]
+- 4지선다 객관식 문제를 만든다.
+- choices에는 보기 4개를 반드시 작성한다.
+- 보기 4개는 서로 다른 내용이어야 한다.
+- answer는 choices 중 하나와 글자까지 완전히 같아야 한다.
+- choice_explanations에는 보기 4개 각각의 해설을 작성한다.
+"""
+
+        output_format = f"""
+[출력 형식]
+{{
+  "question_type": "multiple_choice",
+  "question_polarity": "positive",
+  "question": "질문 한 문장",
+  "choices": ["보기1", "보기2", "보기3", "보기4"],
+  "answer": "choices 중 정답 문장 하나",
+  "part_summary": "출제 파트 요약",
+  "evidence_text": "정답 근거",
+  "explanation": "정답인 이유",
+  "choice_explanations": [
+    {{"choice": "보기1", "is_answer": true, "is_factually_correct": true, "explanation": "해설"}},
+    {{"choice": "보기2", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
+    {{"choice": "보기3", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
+    {{"choice": "보기4", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}}
+  ],
+  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
+  "concept": "핵심 개념",
+  "difficulty": {level_num},
+  "hint": "짧은 힌트 한 문장",
+  "grading_criteria": []
+}}
+"""
+
     return f"""
 너는 대학 강의자료 기반 학습 문제를 만드는 AI 튜터이다.
 
-반드시 [교안 근거]에 있는 내용만 사용해서 4지선다 객관식 문제 1개를 만들어라.
+반드시 [교안 근거]에 있는 내용만 사용해서 학습 문제 1개를 만들어라.
 교안 근거에 없는 개념, 정의, 수식, 수치, 용어, 사례, 역할, 효과를 상상해서 추가하지 마라.
 전문용어, 고유명사, 수식, 숫자, 날짜는 교안 근거에 나온 표현을 최대한 그대로 사용하라.
 
@@ -499,38 +575,21 @@ def build_quiz_prompt(
 
 [공통 생성 규칙]
 - 문제 문장은 반드시 질문형으로 작성한다.
-- 보기 4개는 서로 다른 내용이어야 한다.
-- 정답은 보기 4개 중 하나와 글자까지 완전히 같아야 한다.
-- 정답 보기는 하나의 핵심 사실만 담는다.
-- 한 보기 안에 서로 다른 개념, 조건, 역할, 수식, 단계, 사건을 무리하게 합치지 마라.
+- 교안 근거에 없는 내용을 만들지 마라.
 - part_summary는 1~2문장으로 작성한다.
 - evidence_text는 정답 판단에 필요한 직접 근거만 1~2문장으로 작성한다.
 - explanation은 1~2문장으로 작성한다.
-- choice_explanations에는 보기 4개 각각의 해설을 1문장씩 작성한다.
 - source_pages에는 [사용 가능한 근거 페이지] 안에 있는 숫자만 넣는다.
 - difficulty는 반드시 {level_num}으로 작성한다.
 - 출력은 반드시 JSON 객체 하나만 반환한다.
+- JSON 앞뒤에 설명 문장이나 마크다운 코드블록을 붙이지 마라.
+- 빈칸 주관식이면 question에 반드시 "_____"를 정확히 한 번 포함한다.
+- 빈칸 주관식이면 answer는 빈칸에 들어갈 단어 또는 짧은 구절만 작성한다.
+- 빈칸 주관식이면 choices는 []로 둔다.
 
-[출력 형식]
-{{
-  "question_polarity": "positive",
-  "question": "질문 한 문장",
-  "choices": ["보기1", "보기2", "보기3", "보기4"],
-  "answer": "choices 중 정답 문장 하나",
-  "part_summary": "출제 파트 요약",
-  "evidence_text": "정답 근거",
-  "explanation": "정답인 이유",
-  "choice_explanations": [
-    {{"choice": "보기1", "is_answer": true, "is_factually_correct": true, "explanation": "해설"}},
-    {{"choice": "보기2", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
-    {{"choice": "보기3", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
-    {{"choice": "보기4", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}}
-  ],
-  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
-  "concept": "핵심 개념",
-  "difficulty": {level_num},
-  "hint": "짧은 힌트 한 문장"
-}}
+{type_rule}
+
+{output_format}
 """.strip()
 
 
@@ -972,6 +1031,7 @@ def clean_quiz_schema(
     answer = str(quiz.get("answer", "")).strip()
 
     clean = {
+        "question_type": str(quiz.get("question_type", "multiple_choice")).strip(),
         "question_polarity": infer_polarity(
             str(quiz.get("question", "")),
             str(quiz.get("question_polarity", "positive"))
@@ -986,7 +1046,8 @@ def clean_quiz_schema(
         "source_pages": filter_source_pages(quiz.get("source_pages", []), allowed_pages),
         "concept": str(quiz.get("concept", "")).strip(),
         "difficulty": int(expected_difficulty),
-        "hint": str(quiz.get("hint", "")).strip()
+        "hint": str(quiz.get("hint", "")).strip(),
+        "grading_criteria": quiz.get("grading_criteria", [])
     }
 
     raw_explanations = quiz.get("choice_explanations", [])
@@ -1017,12 +1078,30 @@ def clean_quiz_schema(
 
 
 def basic_validate_quiz(quiz: Dict[str, Any]) -> Tuple[bool, str]:
-    # 여기서 너무 빡세게 막지 않는다. 핵심 구조만 검사한다.
     if not quiz.get("question"):
         return False, "문제가 비어 있습니다."
 
-    choices = quiz.get("choices", [])
     answer = quiz.get("answer", "")
+
+    if not answer:
+        return False, "정답 또는 모범 답안이 비어 있습니다."
+
+    question_type = quiz.get("question_type", "multiple_choice")
+
+    # 빈칸 주관식 검증
+    if question_type == "fill_blank":
+        question = str(quiz.get("question", ""))
+
+        if "_____" not in question:
+            return False, "빈칸 주관식 문제에는 _____ 표시가 필요합니다."
+
+        if len(str(answer)) > 50:
+            return False, "빈칸 정답이 너무 깁니다."
+
+        return True, "빈칸 주관식 검증 통과"
+
+    # 객관식 검증
+    choices = quiz.get("choices", [])
 
     if not isinstance(choices, list) or len(choices) != 4:
         return False, "보기 4개가 필요합니다."
@@ -1039,7 +1118,7 @@ def basic_validate_quiz(quiz: Dict[str, Any]) -> Tuple[bool, str]:
     if any(len(str(c)) > 130 for c in choices):
         return False, "보기 중 하나가 너무 깁니다."
 
-    return True, "검증 통과"
+    return True, "객관식 검증 통과"
 
 
 def grounded_warning(quiz: Dict[str, Any], context_text: str, banned_terms: List[str]) -> List[str]:
@@ -1415,7 +1494,7 @@ try:
     with col2:
         question_type = st.selectbox(
             "문제 유형",
-            ["4지선다 객관식"],
+            ["4지선다 객관식", "빈칸 주관식"],
             index=0
         )
 
@@ -1537,13 +1616,29 @@ try:
         st.markdown(f"### Q. {quiz.get('question', '')}")
 
         choices = quiz.get("choices", [])
+        question_type_value = quiz.get("question_type", "multiple_choice")
 
-        if choices:
-            for idx, choice in enumerate(choices, start=1):
-                st.write(f"{idx}. {choice}")
+        if question_type_value == "multiple_choice":
+            if choices:
+                for idx, choice in enumerate(choices, start=1):
+                    st.write(f"{idx}. {choice}")
+        elif question_type_value == "fill_blank":
+             st.info("빈칸 주관식 문항입니다. 빈칸에 들어갈 단어 또는 짧은 구절을 답하면 됩니다.")
+        else:
+             st.info("주관식 문항입니다. 보기는 제공되지 않습니다.")
 
         st.markdown("### 정답")
         st.success(quiz.get("answer", ""))
+        
+        if quiz.get("grading_criteria"):
+            st.markdown("### 채점 기준")
+            for idx, item in enumerate(quiz.get("grading_criteria", []), start=1):
+                st.write(f"{idx}. {item}")
+
+        if quiz.get("grading_criteria"):
+            st.markdown("### 채점 기준")
+            for idx, item in enumerate(quiz.get("grading_criteria", []), start=1):
+                st.write(f"{idx}. {item}")
 
         if quiz.get("part_summary"):
             st.markdown("### 출제 파트 요약")
@@ -1556,7 +1651,7 @@ try:
         st.markdown("### 해설")
         st.write(quiz.get("explanation", ""))
 
-        if quiz.get("choice_explanations"):
+        if question_type_value == "multiple_choice" and quiz.get("choice_explanations"):
             st.markdown("### 보기별 해설")
 
             for idx, item in enumerate(quiz["choice_explanations"], start=1):
