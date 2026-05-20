@@ -1,6 +1,7 @@
 
 import json
 import re
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 
 import chromadb
@@ -139,6 +140,23 @@ def normalize_for_match(text: Any) -> str:
     text = text.replace("·", "․")
     text = re.sub(r"\s+", "", text)
     return text
+
+
+def normalize_blank_marker(question: Any) -> str:
+    """
+    빈칸 주관식에서 모델이 ___, ____, _____처럼 서로 다른 길이의 밑줄을 출력해도
+    화면과 검증에서는 표준 빈칸 표시인 _____로 통일한다.
+    """
+    question = str(question).strip()
+    question = re.sub(r"_{3,}", "_____", question)
+    return question
+
+
+def has_blank_marker(question: Any) -> bool:
+    """
+    빈칸 표시가 3개 이상의 밑줄로 들어오면 빈칸 문제로 인정한다.
+    """
+    return re.search(r"_{3,}", str(question)) is not None
 
 
 def tokenize_query(text: str) -> List[str]:
@@ -1105,6 +1123,259 @@ def summaries_by_file_to_markdown(summaries: List[Dict[str, str]]) -> str:
 
 
 # =========================
+# 6-2. 학습 로드맵 생성
+# =========================
+
+def normalize_file_summaries_for_roadmap(file_summaries: Any) -> Dict[str, str]:
+    """
+    파일별 요약 결과를 로드맵에서 쓰기 쉽게 dict 형태로 정리한다.
+    예상 형태:
+    - {"파일명.pdf": "요약 내용"}
+    - [{"file_name": "...", "summary": "..."}]
+    """
+    if not file_summaries:
+        return {}
+
+    if isinstance(file_summaries, dict):
+        return {str(k): str(v) for k, v in file_summaries.items()}
+
+    if isinstance(file_summaries, list):
+        result = {}
+
+        for item in file_summaries:
+            if isinstance(item, dict):
+                file_name = str(item.get("file_name", "업로드 자료"))
+                summary = str(item.get("summary", ""))
+                result[file_name] = summary
+
+        return result
+
+    return {}
+
+
+def compact_page_ranges(pages: List[int]) -> str:
+    pages = sorted(set(int(p) for p in pages if p is not None))
+
+    if not pages:
+        return "-"
+
+    ranges = []
+    start = pages[0]
+    prev = pages[0]
+
+    for page in pages[1:]:
+        if page == prev + 1:
+            prev = page
+        else:
+            if start == prev:
+                ranges.append(str(start))
+            else:
+                ranges.append(f"{start}-{prev}")
+            start = page
+            prev = page
+
+    if start == prev:
+        ranges.append(str(start))
+    else:
+        ranges.append(f"{start}-{prev}")
+
+    return ", ".join(ranges)
+
+
+def get_chunk_file_name(chunk: Dict[str, Any]) -> str:
+    return str(
+        chunk.get("file_name")
+        or chunk.get("material_name")
+        or chunk.get("source_file")
+        or "업로드 자료"
+    )
+
+
+def get_summary_hint(file_name: str, file_summaries: Dict[str, str]) -> str:
+    summary = file_summaries.get(file_name, "")
+
+    if not summary:
+        return "해당 자료의 핵심 개념을 정리하고, 중요한 용어를 확인한다."
+
+    lines = []
+
+    for line in summary.splitlines():
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            continue
+
+        line = line.lstrip("- ").strip()
+
+        if line:
+            lines.append(line)
+
+        if len(lines) >= 2:
+            break
+
+    if not lines:
+        return "해당 자료의 핵심 개념을 정리하고, 중요한 용어를 확인한다."
+
+    return " / ".join(lines)[:160]
+
+
+def build_learning_roadmap_df(
+    chunks: List[Dict[str, Any]],
+    duration_days: int,
+    file_summaries: Optional[Any] = None
+) -> pd.DataFrame:
+    """
+    선택한 기간에 맞춰 PDF 학습 로드맵을 생성한다.
+    - 전체 기간의 약 70%는 진도 학습
+    - 나머지는 누적 복습 / 문제풀이 / 최종 점검
+    """
+    duration_days = int(duration_days)
+    summaries = normalize_file_summaries_for_roadmap(file_summaries)
+
+    valid_chunks = []
+
+    for chunk in chunks:
+        text = str(chunk.get("text", "")).strip()
+
+        if not text:
+            continue
+
+        if is_table_of_contents_like(text):
+            continue
+
+        if int(chunk.get("quality_score", 0)) < 25:
+            continue
+
+        valid_chunks.append(chunk)
+
+    if not valid_chunks:
+        valid_chunks = chunks
+
+    valid_chunks = sorted(
+        valid_chunks,
+        key=lambda x: (
+            get_chunk_file_name(x),
+            int(x.get("page", 0)),
+            str(x.get("chunk_id", ""))
+        )
+    )
+
+    if not valid_chunks:
+        return pd.DataFrame([
+            {
+                "Day": 1,
+                "구분": "오류",
+                "학습 범위": "학습할 청크가 없습니다.",
+                "학습 목표": "PDF 처리를 먼저 진행하세요.",
+                "할 일": "PDF 업로드 후 청킹을 다시 실행하세요.",
+                "점검": "-"
+            }
+        ])
+
+    learning_days = max(1, int(duration_days * 0.7))
+    learning_days = min(learning_days, duration_days)
+    learning_days = min(learning_days, len(valid_chunks))
+
+    review_interval = 3 if duration_days <= 7 else 5 if duration_days <= 28 else 7
+    per_day = max(1, (len(valid_chunks) + learning_days - 1) // learning_days)
+
+    rows = []
+
+    for day in range(1, duration_days + 1):
+        if day <= learning_days:
+            start = (day - 1) * per_day
+            end = start + per_day
+            day_chunks = valid_chunks[start:end]
+
+            grouped: Dict[str, List[int]] = {}
+
+            for chunk in day_chunks:
+                file_name = get_chunk_file_name(chunk)
+                grouped.setdefault(file_name, [])
+                grouped[file_name].append(int(chunk.get("page", 0)))
+
+            scope_parts = []
+
+            for file_name, pages in grouped.items():
+                scope_parts.append(f"{file_name} p.{compact_page_ranges(pages)}")
+
+            scope = " / ".join(scope_parts) if scope_parts else "전체 누적 범위"
+
+            main_file = get_chunk_file_name(day_chunks[0]) if day_chunks else "업로드 자료"
+            goal = get_summary_hint(main_file, summaries)
+
+            task = (
+                "1) 해당 범위 핵심 요약 읽기\n"
+                "2) 중요한 용어 3개 정리\n"
+                "3) 이해 안 되는 부분을 질문으로 바꾸기\n"
+                "4) 객관식/OX/빈칸 문제 중 2개 생성해서 확인"
+            )
+
+            check = "오늘 범위에서 핵심 개념 3개를 설명할 수 있으면 통과"
+
+            if day % review_interval == 0:
+                check += " + 이전 학습 내용 10분 누적 복습"
+
+            rows.append({
+                "Day": day,
+                "구분": "진도 학습",
+                "학습 범위": scope,
+                "학습 목표": goal,
+                "할 일": task,
+                "점검": check
+            })
+
+        else:
+            review_type = "누적 복습"
+
+            if day == duration_days:
+                review_type = "최종 점검"
+
+            task = (
+                "1) 지금까지의 파일별 핵심 요약 다시 읽기\n"
+                "2) 헷갈리는 개념을 약점 개념에 입력해서 문제 생성\n"
+                "3) 틀린 문제의 근거 페이지 다시 확인\n"
+                "4) 빈칸/OX 문제로 빠르게 재점검"
+            )
+
+            if review_type == "최종 점검":
+                task = (
+                    "1) 전체 PDF 핵심 개념 목록 훑기\n"
+                    "2) 파일별 핵심 요약을 기준으로 최종 복습\n"
+                    "3) 약점 개념 중심으로 문제 5개 생성\n"
+                    "4) 틀린 문제만 다시 정리"
+                )
+
+            rows.append({
+                "Day": day,
+                "구분": review_type,
+                "학습 범위": "전체 누적 범위",
+                "학습 목표": "학습한 자료를 잊지 않도록 누적 복습하고 약점 개념을 확인한다.",
+                "할 일": task,
+                "점검": "틀린 문제와 헷갈린 개념을 오답노트에 정리"
+            })
+
+    return pd.DataFrame(rows)
+
+
+def roadmap_df_to_markdown(roadmap_df: pd.DataFrame, duration_days: int) -> str:
+    md = f"# {duration_days}일 학습 로드맵\n\n"
+
+    for _, row in roadmap_df.iterrows():
+        md += f"## Day {row['Day']} - {row['구분']}\n\n"
+        md += f"**학습 범위:** {row['학습 범위']}\n\n"
+        md += f"**학습 목표:** {row['학습 목표']}\n\n"
+        md += f"**할 일:**\n{row['할 일']}\n\n"
+        md += f"**점검:** {row['점검']}\n\n"
+        md += "---\n\n"
+
+    return md.strip()
+
+
+# =========================
 # 7. 검증과 완화
 # =========================
 
@@ -1179,7 +1450,16 @@ def clean_quiz_schema(
         "hint": str(quiz.get("hint", "")).strip(),
         "grading_criteria": quiz.get("grading_criteria", [])
     }
-        # OX 문제 보정
+
+    # 빈칸 주관식 보정
+    # 모델이 ____, ___처럼 다른 길이의 밑줄을 출력해도 표준 _____로 통일한다.
+    if clean["question_type"] == "fill_blank":
+        clean["question"] = normalize_blank_marker(clean["question"])
+        clean["choices"] = []
+        clean["choice_explanations"] = []
+        return clean
+
+    # OX 문제 보정
     if clean["question_type"] == "ox":
         clean["choices"] = ["O", "X"]
 
@@ -1191,10 +1471,6 @@ def clean_quiz_schema(
             clean["answer"] = "X"
 
         # OX 문제는 O/X 자체가 보기이므로 별도의 보기별 해설을 보여주지 않는다.
-        clean["choice_explanations"] = []
-        return clean
-
-    if clean["question_type"] == "fill_blank":
         clean["choice_explanations"] = []
         return clean
 
@@ -1255,8 +1531,9 @@ def basic_validate_quiz(quiz: Dict[str, Any]) -> Tuple[bool, str]:
     if question_type == "fill_blank":
         question = str(quiz.get("question", ""))
 
-        if "_____" not in question:
-            return False, "빈칸 주관식 문제에는 _____ 표시가 필요합니다."
+        # 모델이 ___, ____, _____ 중 무엇을 출력해도 3개 이상의 밑줄이면 빈칸으로 인정한다.
+        if not has_blank_marker(question):
+            return False, "빈칸 주관식 문제에는 ___ 또는 _____ 같은 빈칸 표시가 필요합니다."
 
         if len(str(answer)) > 50:
             return False, "빈칸 정답이 너무 깁니다."
@@ -1401,6 +1678,952 @@ def generate_quiz_with_ollama(
     return quiz
 
 
+
+
+
+
+# =========================
+# 7-0. 학생 풀이 채점 / 학습 상태 분석 / 보충 문제 생성
+# =========================
+
+def init_learning_state() -> None:
+    """
+    학생 풀이 기록과 채점 결과를 session_state에 준비한다.
+    실제 서비스에서는 이 부분을 SQLite/PostgreSQL로 옮기면 된다.
+    """
+    if "attempts" not in st.session_state:
+        st.session_state["attempts"] = []
+
+    if "graded_results" not in st.session_state:
+        st.session_state["graded_results"] = {}
+
+    if "remedial_quizzes" not in st.session_state:
+        st.session_state["remedial_quizzes"] = {}
+
+
+def normalize_answer_for_grading(text: Any) -> str:
+    """
+    채점 비교용 정규화.
+    띄어쓰기, 대소문자, 일부 기호 차이를 완화한다.
+    """
+    text = str(text).strip()
+    text = text.replace("○", "O").replace("×", "X")
+    text = text.replace("정답:", "").replace("답:", "")
+    return normalize_for_match(text)
+
+
+def normalize_ox_answer(text: Any) -> str:
+    value = str(text).strip().upper()
+
+    if value in ["O", "○", "TRUE", "참", "맞다", "옳다", "1"]:
+        return "O"
+
+    if value in ["X", "×", "FALSE", "거짓", "틀리다", "아니다", "2"]:
+        return "X"
+
+    return value
+
+
+def grade_student_answer(quiz: Dict[str, Any], student_answer: Any) -> bool:
+    question_type = quiz.get("question_type", "multiple_choice")
+    correct_answer = str(quiz.get("answer", "")).strip()
+
+    if question_type == "ox":
+        return normalize_ox_answer(student_answer) == normalize_ox_answer(correct_answer)
+
+    if question_type == "multiple_choice":
+        return normalize_answer_for_grading(student_answer) == normalize_answer_for_grading(correct_answer)
+
+    if question_type == "fill_blank":
+        student_norm = normalize_answer_for_grading(student_answer)
+        answer_norm = normalize_answer_for_grading(correct_answer)
+
+        if not student_norm or not answer_norm:
+            return False
+
+        # 빈칸 답은 보통 단어/짧은 구절이므로 기본은 정규화 후 완전일치.
+        if student_norm == answer_norm:
+            return True
+
+        # 학생이 짧은 설명문을 같이 쓴 경우를 약간 허용한다.
+        if len(answer_norm) >= 2 and answer_norm in student_norm:
+            return True
+
+        return False
+
+    return normalize_answer_for_grading(student_answer) == normalize_answer_for_grading(correct_answer)
+
+
+def build_attempt_record(
+    quiz: Dict[str, Any],
+    student_answer: Any,
+    is_correct: bool,
+    confidence: int,
+    used_hint: bool,
+    origin: str,
+    origin_key: str
+) -> Dict[str, Any]:
+    concept = str(quiz.get("concept", "")).strip() or "기타 개념"
+
+    return {
+        "attempt_id": f"attempt_{len(st.session_state.get('attempts', [])) + 1}",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "origin": origin,
+        "origin_key": origin_key,
+        "file_name": quiz.get("file_name", ""),
+        "material_id": quiz.get("material_id", ""),
+        "roadmap_day": quiz.get("roadmap_day", ""),
+        "question_type": quiz.get("question_type", "multiple_choice"),
+        "question": quiz.get("question", ""),
+        "answer": quiz.get("answer", ""),
+        "student_answer": str(student_answer).strip(),
+        "is_correct": bool(is_correct),
+        "concept": concept,
+        "difficulty": quiz.get("difficulty", ""),
+        "confidence": int(confidence),
+        "used_hint": bool(used_hint),
+        "source_pages": quiz.get("source_pages", []),
+        "explanation": quiz.get("explanation", ""),
+        "evidence_text": quiz.get("evidence_text", "")
+    }
+
+
+def save_attempt_record(attempt: Dict[str, Any]) -> None:
+    init_learning_state()
+    st.session_state["attempts"].append(attempt)
+
+
+def render_quiz_feedback(quiz: Dict[str, Any], is_correct: bool) -> None:
+    if is_correct:
+        st.success("정답입니다.")
+    else:
+        st.error("오답입니다.")
+
+    st.markdown("### 정답")
+    st.success(quiz.get("answer", ""))
+
+    if quiz.get("explanation"):
+        st.markdown("### 해설")
+        st.write(quiz.get("explanation", ""))
+
+    if quiz.get("evidence_text"):
+        st.markdown("### 정답 근거")
+        st.info(quiz.get("evidence_text", ""))
+
+    if quiz.get("source_pages"):
+        st.markdown("### 근거 페이지")
+        st.write(", ".join(str(page) for page in quiz.get("source_pages", [])))
+
+    if quiz.get("concept"):
+        st.markdown("### 저장된 개념")
+        st.write({
+            "concept": quiz.get("concept", ""),
+            "difficulty": quiz.get("difficulty", "")
+        })
+
+
+def render_interactive_quiz(
+    quiz: Dict[str, Any],
+    idx: int,
+    origin: str,
+    origin_key: str,
+    title: str = "문제"
+) -> None:
+    """
+    문제를 먼저 보여주고, 학생이 답을 입력/선택한 뒤 채점한다.
+    채점 후에만 정답, 해설, 근거를 공개하고 풀이 기록을 저장한다.
+    """
+    init_learning_state()
+
+    st.markdown(f"#### {title} {idx}")
+
+    if quiz.get("concept") == "generation_error":
+        st.error("문제 생성에 실패했습니다.")
+        st.write(quiz.get("explanation", ""))
+        if quiz.get("evidence_text"):
+            with st.expander("원본 출력 보기", expanded=False):
+                st.write(quiz.get("evidence_text", ""))
+        return
+
+    question_type_value = quiz.get("question_type", "multiple_choice")
+    choices = quiz.get("choices", [])
+    key_base = make_safe_id(f"{origin}_{origin_key}_{idx}_{str(quiz.get('question', ''))[:40]}")
+    result_key = f"graded_result_{key_base}"
+
+    st.markdown(f"**Q. {quiz.get('question', '')}**")
+
+    if question_type_value == "multiple_choice" and choices:
+        for c_idx, choice in enumerate(choices, start=1):
+            st.write(f"{c_idx}. {choice}")
+    elif question_type_value == "ox":
+        st.info("OX 문항입니다. 설명이 옳으면 O, 틀리면 X를 선택하면 됩니다.")
+        st.write("1. O")
+        st.write("2. X")
+    elif question_type_value == "fill_blank":
+        st.info("빈칸 주관식 문항입니다. 빈칸에 들어갈 단어 또는 짧은 구절을 입력하세요.")
+
+    if quiz.get("hint"):
+        with st.expander("힌트 보기", expanded=False):
+            st.info(quiz.get("hint", ""))
+
+    with st.form(key=f"answer_form_{key_base}"):
+        if question_type_value == "multiple_choice" and choices:
+            student_answer = st.radio(
+                "답을 선택하세요.",
+                choices,
+                index=None,
+                key=f"student_answer_{key_base}"
+            )
+        elif question_type_value == "ox":
+            student_answer = st.radio(
+                "답을 선택하세요.",
+                ["O", "X"],
+                index=None,
+                key=f"student_answer_{key_base}"
+            )
+        else:
+            student_answer = st.text_input(
+                "답을 입력하세요.",
+                key=f"student_answer_{key_base}",
+                placeholder="예: 데이터, queue, 과전법"
+            )
+
+        confidence = st.slider(
+            "정답 확신도",
+            min_value=1,
+            max_value=5,
+            value=3,
+            help="1은 거의 모르겠음, 5는 확실히 알고 있음입니다.",
+            key=f"confidence_{key_base}"
+        )
+
+        used_hint = st.checkbox(
+            "힌트를 보고 풀었어요.",
+            key=f"used_hint_{key_base}"
+        )
+
+        submitted = st.form_submit_button("채점하기")
+
+    if submitted:
+        if student_answer is None or not str(student_answer).strip():
+            st.warning("답을 입력하거나 선택하세요.")
+        else:
+            is_correct = grade_student_answer(quiz, student_answer)
+            attempt = build_attempt_record(
+                quiz=quiz,
+                student_answer=student_answer,
+                is_correct=is_correct,
+                confidence=confidence,
+                used_hint=used_hint,
+                origin=origin,
+                origin_key=origin_key
+            )
+            save_attempt_record(attempt)
+            st.session_state["graded_results"][result_key] = attempt
+
+    if st.session_state["graded_results"].get(result_key):
+        attempt = st.session_state["graded_results"][result_key]
+        render_quiz_feedback(quiz, bool(attempt.get("is_correct")))
+
+
+def analyze_concept_mastery(attempts: List[Dict[str, Any]]) -> pd.DataFrame:
+    """
+    풀이 기록을 바탕으로 개념별 학습 상태를 계산한다.
+    - 정답률
+    - 확신도
+    - 힌트 사용 여부
+    - 오답 횟수
+    를 종합하여 취약/틀림/흔들림/학습됨으로 분류한다.
+    """
+    if not attempts:
+        return pd.DataFrame()
+
+    stats: Dict[str, Dict[str, Any]] = {}
+
+    for attempt in attempts:
+        concept = str(attempt.get("concept", "기타 개념")).strip() or "기타 개념"
+
+        if concept not in stats:
+            stats[concept] = {
+                "concept": concept,
+                "total": 0,
+                "correct": 0,
+                "wrong": 0,
+                "confidence_sum": 0,
+                "hint_used": 0,
+                "last_attempt": ""
+            }
+
+        stat = stats[concept]
+        stat["total"] += 1
+
+        if attempt.get("is_correct"):
+            stat["correct"] += 1
+        else:
+            stat["wrong"] += 1
+
+        stat["confidence_sum"] += int(attempt.get("confidence", 3))
+
+        if attempt.get("used_hint"):
+            stat["hint_used"] += 1
+
+        stat["last_attempt"] = attempt.get("timestamp", "")
+
+    rows = []
+
+    for concept, stat in stats.items():
+        total = max(1, stat["total"])
+        accuracy = stat["correct"] / total
+        avg_confidence = stat["confidence_sum"] / total
+        hint_rate = stat["hint_used"] / total
+        no_hint_rate = 1 - hint_rate
+
+        mastery_score = (
+            accuracy * 60
+            + (avg_confidence / 5) * 25
+            + no_hint_rate * 15
+        )
+
+        if stat["wrong"] > 0 and accuracy <= 0.5:
+            status = "틀린 개념"
+            recommendation = "오답 원인을 확인하고 같은 개념의 보충 문제를 다시 풀기"
+        elif mastery_score < 60:
+            status = "취약 개념"
+            recommendation = "핵심 요약을 다시 읽고 쉬운 문제부터 다시 풀기"
+        elif avg_confidence < 3.5 or stat["hint_used"] > 0:
+            status = "흔들리는 개념"
+            recommendation = "힌트 없이 비슷한 문제를 1~3개 더 풀기"
+        else:
+            status = "학습됨"
+            recommendation = "짧은 복습만 유지"
+
+        rows.append({
+            "concept": concept,
+            "status": status,
+            "mastery_score": round(mastery_score, 1),
+            "total": stat["total"],
+            "correct": stat["correct"],
+            "wrong": stat["wrong"],
+            "accuracy": round(accuracy, 2),
+            "avg_confidence": round(avg_confidence, 2),
+            "hint_used": stat["hint_used"],
+            "recommendation": recommendation,
+            "last_attempt": stat["last_attempt"]
+        })
+
+    return pd.DataFrame(rows).sort_values(
+        by=["mastery_score", "wrong"],
+        ascending=[True, False]
+    )
+
+
+def get_target_concepts_for_remedial(mastery_df: pd.DataFrame) -> List[str]:
+    if mastery_df is None or mastery_df.empty:
+        return []
+
+    target_df = mastery_df[
+        mastery_df["status"].isin(["틀린 개념", "취약 개념", "흔들리는 개념"])
+    ]
+
+    if target_df.empty:
+        target_df = mastery_df
+
+    return target_df["concept"].dropna().astype(str).tolist()
+
+
+def build_remedial_user_query(
+    target_concept: str,
+    quiz_index: int,
+    quiz_count: int,
+    question_type: str
+) -> str:
+    return (
+        f"학생이 '{target_concept}' 개념에서 부족함을 보였어. "
+        f"이 개념을 다시 학습할 수 있는 보충 문제를 만들어줘. "
+        f"현재 문제는 {quiz_count}개 중 {quiz_index + 1}번째 문제이고, "
+        f"문제 유형은 {question_type}이야. "
+        "검색된 교안 근거 안에서만 만들고, 기존 문제와 최대한 중복되지 않게 만들어줘."
+    )
+
+
+def generate_remedial_quizzes_with_ollama(
+    ollama_url: str,
+    model_name: str,
+    collection,
+    embedding_model,
+    target_concept: str,
+    quiz_count: int,
+    student_level: str,
+    question_type_mode: str,
+    top_k: int,
+    extra_keywords: List[str],
+    num_predict: int,
+    stream_read_timeout: int,
+    banned_terms: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    풀이 기록에서 발견된 취약/틀린/흔들리는 개념을 대상으로 보충 문제를 생성한다.
+    학생은 1개, 3개, 5개 중 원하는 개수를 선택할 수 있다.
+    """
+    quiz_count = int(quiz_count)
+    search_query = f"{target_concept} 개념 보충 문제"
+    boosted_keywords = list(extra_keywords or [])
+
+    if target_concept and target_concept not in boosted_keywords:
+        boosted_keywords.append(target_concept)
+
+    retrieved = search_chunks(
+        collection=collection,
+        query=search_query,
+        embedding_model=embedding_model,
+        top_k=max(int(top_k), quiz_count),
+        extra_keywords=boosted_keywords
+    )
+
+    if not retrieved:
+        return [make_error_quiz("보충 문제를 만들 관련 청크를 찾지 못했습니다.", "", [])]
+
+    selected_chunks = select_representative_chunks_for_quizzes(retrieved, quiz_count)
+    quizzes = []
+
+    for idx, chunk in enumerate(selected_chunks):
+        q_type = get_review_question_type(idx, question_type_mode)
+        user_query = build_remedial_user_query(
+            target_concept=target_concept,
+            quiz_index=idx,
+            quiz_count=quiz_count,
+            question_type=q_type
+        )
+
+        retrieved_chunks = [chunk]
+        allowed_pages = [
+            int(item.get("page"))
+            for item in retrieved_chunks
+            if item.get("page") is not None
+        ]
+        context_text = "\n\n".join(str(item.get("text", "")) for item in retrieved_chunks)
+
+        prompt = build_quiz_prompt(
+            user_query=user_query,
+            retrieved_chunks=retrieved_chunks,
+            student_level=student_level,
+            weak_concept=target_concept,
+            question_type=q_type,
+            question_direction="자동(긍정형 우선)",
+            question_intent="general"
+        )
+
+        quiz = generate_quiz_with_ollama(
+            prompt=prompt,
+            model_name=model_name,
+            ollama_url=ollama_url,
+            allowed_pages=allowed_pages,
+            expected_difficulty=get_level_number(student_level),
+            context_text=context_text,
+            num_predict=num_predict,
+            stream_read_timeout=stream_read_timeout,
+            banned_terms=banned_terms
+        )
+
+        quiz["target_concept"] = target_concept
+        quiz["remedial_quiz_index"] = idx + 1
+        quiz["remedial_quiz_total"] = quiz_count
+        quiz["review_question_type_mode"] = question_type_mode
+        quizzes.append(quiz)
+
+    return quizzes
+
+
+# =========================
+# 7-1. 파일별 학습 확인 문제 생성
+# =========================
+
+def select_representative_chunks_for_quizzes(
+    file_chunks: List[Dict[str, Any]],
+    quiz_count: int
+) -> List[Dict[str, Any]]:
+    """
+    파일별 학습 확인 문제를 만들 때 사용할 대표 청크를 고른다.
+    - 목차/표지성 청크 제외
+    - quality_score가 낮은 청크 제외
+    - 파일 앞/중간/뒤에서 골고루 선택
+    """
+    quiz_count = int(quiz_count)
+    good_chunks = []
+
+    for chunk in file_chunks:
+        text = str(chunk.get("text", "")).strip()
+
+        if not text:
+            continue
+
+        if is_table_of_contents_like(text):
+            continue
+
+        if int(chunk.get("quality_score", 0)) < 25:
+            continue
+
+        good_chunks.append(chunk)
+
+    if not good_chunks:
+        good_chunks = [chunk for chunk in file_chunks if str(chunk.get("text", "")).strip()]
+
+    good_chunks = sorted(
+        good_chunks,
+        key=lambda x: (
+            int(x.get("page", 0)),
+            str(x.get("chunk_id", ""))
+        )
+    )
+
+    if not good_chunks:
+        return []
+
+    selected = []
+
+    if len(good_chunks) >= quiz_count:
+        step = len(good_chunks) / quiz_count
+
+        for i in range(quiz_count):
+            idx = min(int(i * step), len(good_chunks) - 1)
+            selected.append(good_chunks[idx])
+    else:
+        # 청크 수가 문제 수보다 적으면 순환 사용한다.
+        for i in range(quiz_count):
+            selected.append(good_chunks[i % len(good_chunks)])
+
+    return selected
+
+
+def get_review_question_type(index: int, mode: str) -> str:
+    """
+    파일별 학습 확인 문제의 유형을 결정한다.
+    학생 요청 기반 문제 생성은 그대로 1개만 유지하고,
+    이 함수는 파일별 확인 문제 세트에서만 사용한다.
+    """
+    if mode == "4지선다 객관식만":
+        return "4지선다 객관식"
+
+    if mode == "OX 문제만":
+        return "OX 문제"
+
+    if mode == "빈칸 주관식만":
+        return "빈칸 주관식"
+
+    mixed = ["4지선다 객관식", "OX 문제", "빈칸 주관식", "4지선다 객관식", "OX 문제"]
+    return mixed[index % len(mixed)]
+
+
+def find_material_group(
+    chunks: List[Dict[str, Any]],
+    material_id: str
+) -> Optional[Dict[str, Any]]:
+    for item in group_chunks_by_material(chunks):
+        if str(item.get("material_id", "")) == str(material_id):
+            return item
+
+    return None
+
+
+def build_file_review_user_query(
+    file_name: str,
+    quiz_index: int,
+    quiz_count: int,
+    question_type: str
+) -> str:
+    return (
+        f"'{file_name}' 자료의 핵심 내용을 확인하는 학습 확인 문제를 만들어줘. "
+        f"현재 문제는 {quiz_count}개 중 {quiz_index + 1}번째 문제이고, "
+        f"문제 유형은 {question_type}이야. "
+        "선택된 교안 근거의 핵심 개념을 바탕으로 중복되지 않는 문제를 만들어줘."
+    )
+
+
+def generate_file_review_quizzes_with_ollama(
+    ollama_url: str,
+    model_name: str,
+    chunks: List[Dict[str, Any]],
+    material_id: str,
+    quiz_count: int,
+    student_level: str,
+    question_type_mode: str,
+    num_predict: int,
+    stream_read_timeout: int,
+    banned_terms: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    특정 PDF 파일 하나에 대해 학생이 선택한 개수만큼 학습 확인 문제를 생성한다.
+    - 학생 요청 기반 문제 생성과 별개로 동작한다.
+    - 학생 요청 기반 문제 생성은 기존처럼 1개만 생성된다.
+    - 이 함수는 파일별 핵심 요약 이후, 학생이 원할 때 1/3/5개 문제를 추가 생성한다.
+    """
+    material_group = find_material_group(chunks, material_id)
+
+    if not material_group:
+        return [make_error_quiz("해당 파일의 청크를 찾지 못했습니다.", "", [])]
+
+    file_name = str(material_group.get("file_name", "uploaded.pdf"))
+    file_chunks = material_group.get("chunks", [])
+    selected_chunks = select_representative_chunks_for_quizzes(file_chunks, quiz_count)
+
+    if not selected_chunks:
+        return [make_error_quiz("학습 확인 문제를 만들 수 있는 본문 청크가 없습니다.", "", [])]
+
+    quizzes = []
+
+    for idx, chunk in enumerate(selected_chunks):
+        q_type = get_review_question_type(idx, question_type_mode)
+        user_query = build_file_review_user_query(
+            file_name=file_name,
+            quiz_index=idx,
+            quiz_count=quiz_count,
+            question_type=q_type
+        )
+
+        retrieved_chunks = [chunk]
+        allowed_pages = [
+            int(item.get("page"))
+            for item in retrieved_chunks
+            if item.get("page") is not None
+        ]
+        context_text = "\n\n".join(str(item.get("text", "")) for item in retrieved_chunks)
+        question_intent = "general"
+
+        prompt = build_quiz_prompt(
+            user_query=user_query,
+            retrieved_chunks=retrieved_chunks,
+            student_level=student_level,
+            weak_concept="",
+            question_type=q_type,
+            question_direction="자동(긍정형 우선)",
+            question_intent=question_intent
+        )
+
+        quiz = generate_quiz_with_ollama(
+            prompt=prompt,
+            model_name=model_name,
+            ollama_url=ollama_url,
+            allowed_pages=allowed_pages,
+            expected_difficulty=get_level_number(student_level),
+            context_text=context_text,
+            num_predict=num_predict,
+            stream_read_timeout=stream_read_timeout,
+            banned_terms=banned_terms
+        )
+
+        quiz["review_quiz_index"] = idx + 1
+        quiz["review_quiz_total"] = quiz_count
+        quiz["file_name"] = file_name
+        quiz["material_id"] = material_id
+        quiz["review_question_type_mode"] = question_type_mode
+
+        quizzes.append(quiz)
+
+    return quizzes
+
+
+def quiz_to_markdown(quiz: Dict[str, Any], idx: int) -> str:
+    question_type = quiz.get("question_type", "multiple_choice")
+    md = f"## 문제 {idx}\n\n"
+    md += f"**유형:** {question_type}\n\n"
+    md += f"**Q. {quiz.get('question', '')}**\n\n"
+
+    choices = quiz.get("choices", [])
+
+    if question_type == "multiple_choice" and choices:
+        for c_idx, choice in enumerate(choices, start=1):
+            md += f"{c_idx}. {choice}\n"
+        md += "\n"
+    elif question_type == "ox":
+        md += "1. O\n2. X\n\n"
+    elif question_type == "fill_blank":
+        md += "빈칸에 들어갈 단어 또는 짧은 구절을 작성하세요.\n\n"
+
+    md += f"**정답:** {quiz.get('answer', '')}\n\n"
+
+    if quiz.get("explanation"):
+        md += f"**해설:** {quiz.get('explanation', '')}\n\n"
+
+    if quiz.get("evidence_text"):
+        md += f"**정답 근거:** {quiz.get('evidence_text', '')}\n\n"
+
+    if quiz.get("source_pages"):
+        md += "**근거 페이지:** " + ", ".join(str(p) for p in quiz.get("source_pages", [])) + "\n\n"
+
+    if quiz.get("concept"):
+        md += f"**핵심 개념:** {quiz.get('concept', '')}\n\n"
+
+    return md.strip()
+
+
+def review_quizzes_to_markdown(file_name: str, quizzes: List[Dict[str, Any]]) -> str:
+    md = f"# {file_name} 학습 확인 문제\n\n"
+
+    for idx, quiz in enumerate(quizzes, start=1):
+        md += quiz_to_markdown(quiz, idx)
+        md += "\n\n---\n\n"
+
+    return md.strip()
+
+
+# =========================
+# 7-2. 로드맵 Day별 학습 확인 문제 생성
+# =========================
+
+def get_valid_learning_chunks_for_roadmap(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    로드맵과 로드맵 기반 문제 생성에서 공통으로 사용할 학습용 청크를 고른다.
+    """
+    valid_chunks = []
+
+    for chunk in chunks:
+        text = str(chunk.get("text", "")).strip()
+
+        if not text:
+            continue
+
+        if is_table_of_contents_like(text):
+            continue
+
+        if int(chunk.get("quality_score", 0)) < 25:
+            continue
+
+        valid_chunks.append(chunk)
+
+    if not valid_chunks:
+        valid_chunks = [chunk for chunk in chunks if str(chunk.get("text", "")).strip()]
+
+    valid_chunks = sorted(
+        valid_chunks,
+        key=lambda x: (
+            get_chunk_file_name(x),
+            int(x.get("page", 0)),
+            str(x.get("chunk_id", ""))
+        )
+    )
+
+    return valid_chunks
+
+
+def get_roadmap_learning_days(total_chunks: int, duration_days: int) -> int:
+    """
+    build_learning_roadmap_df와 동일한 방식으로 진도 학습일 수를 계산한다.
+    """
+    duration_days = int(duration_days)
+
+    if total_chunks <= 0:
+        return 1
+
+    learning_days = max(1, int(duration_days * 0.7))
+    learning_days = min(learning_days, duration_days)
+    learning_days = min(learning_days, total_chunks)
+
+    return max(1, learning_days)
+
+
+def get_chunks_for_roadmap_day(
+    chunks: List[Dict[str, Any]],
+    duration_days: int,
+    day: int
+) -> List[Dict[str, Any]]:
+    """
+    선택한 로드맵 Day의 학습 범위에 해당하는 청크를 반환한다.
+    - 진도 학습일: 해당 날짜에 배정된 청크만 사용
+    - 누적 복습/최종 점검일: 전체 누적 범위 청크를 사용
+    """
+    valid_chunks = get_valid_learning_chunks_for_roadmap(chunks)
+
+    if not valid_chunks:
+        return []
+
+    duration_days = int(duration_days)
+    day = int(day)
+    learning_days = get_roadmap_learning_days(len(valid_chunks), duration_days)
+    per_day = max(1, (len(valid_chunks) + learning_days - 1) // learning_days)
+
+    if day <= learning_days:
+        start = (day - 1) * per_day
+        end = start + per_day
+        return valid_chunks[start:end]
+
+    # 복습/최종 점검일은 지금까지의 누적 범위를 대상으로 한다.
+    return valid_chunks
+
+
+def describe_chunks_scope(chunks: List[Dict[str, Any]]) -> str:
+    """
+    청크 목록을 '파일명 p.1-3 / 파일명2 p.4' 형태의 학습 범위 텍스트로 바꾼다.
+    """
+    grouped: Dict[str, List[int]] = {}
+
+    for chunk in chunks:
+        file_name = get_chunk_file_name(chunk)
+        grouped.setdefault(file_name, [])
+        grouped[file_name].append(int(chunk.get("page", 0)))
+
+    scope_parts = []
+
+    for file_name, pages in grouped.items():
+        scope_parts.append(f"{file_name} p.{compact_page_ranges(pages)}")
+
+    return " / ".join(scope_parts) if scope_parts else "전체 누적 범위"
+
+
+def build_roadmap_day_user_query(
+    day: int,
+    duration_days: int,
+    scope_text: str,
+    quiz_index: int,
+    quiz_count: int,
+    question_type: str
+) -> str:
+    return (
+        f"{duration_days}일 학습 로드맵의 Day {day} 학습 범위에 해당하는 학습 확인 문제를 만들어줘. "
+        f"학습 범위는 {scope_text}이고, 현재 문제는 {quiz_count}개 중 {quiz_index + 1}번째 문제야. "
+        f"문제 유형은 {question_type}이야. "
+        "선택된 교안 근거 안에서만 핵심 개념을 확인하는 문제를 만들어줘. "
+        "같은 날짜 안에서 앞 문제와 최대한 중복되지 않게 만들어줘."
+    )
+
+
+def generate_roadmap_day_quizzes_with_ollama(
+    ollama_url: str,
+    model_name: str,
+    chunks: List[Dict[str, Any]],
+    duration_days: int,
+    day: int,
+    quiz_count: int,
+    student_level: str,
+    question_type_mode: str,
+    num_predict: int,
+    stream_read_timeout: int,
+    banned_terms: List[str]
+) -> List[Dict[str, Any]]:
+    """
+    선택한 로드맵 Day의 학습 범위에 대해 학생이 선택한 개수만큼 문제를 생성한다.
+    학생 요청 기반 문제 생성은 기존처럼 1개만 생성되고, 이 함수와 분리되어 동작한다.
+    """
+    day_chunks = get_chunks_for_roadmap_day(
+        chunks=chunks,
+        duration_days=duration_days,
+        day=day
+    )
+
+    if not day_chunks:
+        return [make_error_quiz("해당 Day의 학습 범위 청크를 찾지 못했습니다.", "", [])]
+
+    selected_chunks = select_representative_chunks_for_quizzes(day_chunks, quiz_count)
+
+    if not selected_chunks:
+        return [make_error_quiz("로드맵 학습 확인 문제를 만들 수 있는 본문 청크가 없습니다.", "", [])]
+
+    scope_text = describe_chunks_scope(day_chunks)
+    quizzes = []
+
+    for idx, chunk in enumerate(selected_chunks):
+        q_type = get_review_question_type(idx, question_type_mode)
+
+        user_query = build_roadmap_day_user_query(
+            day=day,
+            duration_days=duration_days,
+            scope_text=scope_text,
+            quiz_index=idx,
+            quiz_count=quiz_count,
+            question_type=q_type
+        )
+
+        retrieved_chunks = [chunk]
+        allowed_pages = [
+            int(item.get("page"))
+            for item in retrieved_chunks
+            if item.get("page") is not None
+        ]
+        context_text = "\n\n".join(str(item.get("text", "")) for item in retrieved_chunks)
+        question_intent = "general"
+
+        prompt = build_quiz_prompt(
+            user_query=user_query,
+            retrieved_chunks=retrieved_chunks,
+            student_level=student_level,
+            weak_concept="",
+            question_type=q_type,
+            question_direction="자동(긍정형 우선)",
+            question_intent=question_intent
+        )
+
+        quiz = generate_quiz_with_ollama(
+            prompt=prompt,
+            model_name=model_name,
+            ollama_url=ollama_url,
+            allowed_pages=allowed_pages,
+            expected_difficulty=get_level_number(student_level),
+            context_text=context_text,
+            num_predict=num_predict,
+            stream_read_timeout=stream_read_timeout,
+            banned_terms=banned_terms
+        )
+
+        quiz["roadmap_day"] = int(day)
+        quiz["roadmap_duration_days"] = int(duration_days)
+        quiz["roadmap_scope"] = scope_text
+        quiz["roadmap_quiz_index"] = idx + 1
+        quiz["roadmap_quiz_total"] = quiz_count
+        quiz["review_question_type_mode"] = question_type_mode
+
+        quizzes.append(quiz)
+
+    return quizzes
+
+
+def roadmap_day_quizzes_to_markdown(
+    duration_days: int,
+    day: int,
+    scope_text: str,
+    quizzes: List[Dict[str, Any]]
+) -> str:
+    md = f"# {duration_days}일 로드맵 Day {day} 학습 확인 문제\n\n"
+    md += f"**학습 범위:** {scope_text}\n\n"
+
+    for idx, quiz in enumerate(quizzes, start=1):
+        md += quiz_to_markdown(quiz, idx)
+        md += "\n\n---\n\n"
+
+    return md.strip()
+
+
+def render_quiz_for_review(quiz: Dict[str, Any], idx: int) -> None:
+    """
+    파일별/로드맵/보충 학습 확인 문제를 화면에 출력하고,
+    학생 답안을 받아 채점한 뒤 풀이 기록을 저장한다.
+    """
+    origin_parts = [
+        str(quiz.get("material_id", "")),
+        str(quiz.get("roadmap_duration_days", "")),
+        str(quiz.get("roadmap_day", "")),
+        str(quiz.get("target_concept", "")),
+        str(quiz.get("review_quiz_index", "")),
+        str(quiz.get("roadmap_quiz_index", "")),
+        str(quiz.get("remedial_quiz_index", ""))
+    ]
+    origin_key = "_".join([part for part in origin_parts if part]) or f"review_{idx}"
+
+    if quiz.get("target_concept"):
+        origin = "보충 문제"
+    elif quiz.get("roadmap_day"):
+        origin = "로드맵 문제"
+    elif quiz.get("material_id"):
+        origin = "파일별 확인 문제"
+    else:
+        origin = "학습 확인 문제"
+
+    render_interactive_quiz(
+        quiz=quiz,
+        idx=idx,
+        origin=origin,
+        origin_key=origin_key,
+        title="문제"
+    )
+
 # =========================
 # 8. 화면
 # =========================
@@ -1428,6 +2651,8 @@ PDF 업로드
         """,
         language="text"
     )
+
+init_learning_state()
 
 st.sidebar.header("설정")
 
@@ -1649,12 +2874,85 @@ try:
     if st.session_state.get("file_summaries"):
         st.markdown("### PDF별 핵심 요약")
 
+        if "file_review_quizzes" not in st.session_state:
+            st.session_state["file_review_quizzes"] = {}
+
         for item in st.session_state["file_summaries"]:
             file_name = item.get("file_name", "uploaded.pdf")
+            material_id = item.get("material_id", make_safe_id(file_name))
             summary = item.get("summary", "")
 
             with st.expander(f"📄 {file_name}", expanded=True):
                 st.markdown(summary)
+
+                st.markdown("#### 이 파일 학습 확인 문제 생성")
+                st.caption("학생 요청 기반 문제 생성은 아래 3단계에서 계속 1개만 생성됩니다. 이 영역은 파일별 요약을 본 뒤 추가로 확인 문제를 만드는 기능입니다.")
+
+                review_col1, review_col2, review_col3 = st.columns(3)
+
+                with review_col1:
+                    review_count = st.selectbox(
+                        "생성할 문제 수",
+                        [1, 3, 5],
+                        index=0,
+                        key=f"review_count_{material_id}"
+                    )
+
+                with review_col2:
+                    review_type_mode = st.selectbox(
+                        "문제 유형 구성",
+                        ["혼합", "4지선다 객관식만", "OX 문제만", "빈칸 주관식만"],
+                        index=0,
+                        key=f"review_type_{material_id}"
+                    )
+
+                with review_col3:
+                    review_level = st.selectbox(
+                        "난이도",
+                        ["Level 1 - 초급", "Level 2 - 중급", "Level 3 - 상급", "Level 4 - 심화"],
+                        index=1,
+                        key=f"review_level_{material_id}"
+                    )
+
+                if st.button("이 파일 학습 확인 문제 생성", key=f"generate_review_{material_id}"):
+                    if not check_ollama_server(ollama_url):
+                        st.error("Ollama 서버에 연결할 수 없습니다.")
+                        st.stop()
+
+                    with st.spinner(f"{file_name} 학습 확인 문제 {review_count}개를 생성하는 중입니다..."):
+                        review_quizzes = generate_file_review_quizzes_with_ollama(
+                            ollama_url=ollama_url,
+                            model_name=ollama_model,
+                            chunks=chunks,
+                            material_id=material_id,
+                            quiz_count=review_count,
+                            student_level=review_level,
+                            question_type_mode=review_type_mode,
+                            num_predict=num_predict_setting,
+                            stream_read_timeout=stream_timeout_setting,
+                            banned_terms=banned_terms
+                        )
+
+                    st.session_state["file_review_quizzes"][material_id] = review_quizzes
+                    st.success(f"{file_name} 학습 확인 문제 {len(review_quizzes)}개 생성 완료")
+
+                if st.session_state["file_review_quizzes"].get(material_id):
+                    review_quizzes = st.session_state["file_review_quizzes"][material_id]
+                    st.markdown("#### 생성된 학습 확인 문제")
+
+                    for quiz_idx, quiz in enumerate(review_quizzes, start=1):
+                        render_quiz_for_review(quiz, quiz_idx)
+                        st.divider()
+
+                    review_md = review_quizzes_to_markdown(file_name, review_quizzes)
+
+                    st.download_button(
+                        label="이 파일 학습 확인 문제 다운로드",
+                        data=review_md,
+                        file_name=f"review_quizzes_{make_safe_id(file_name)}.md",
+                        mime="text/markdown",
+                        key=f"download_review_{material_id}"
+                    )
 
         all_summaries_md = summaries_by_file_to_markdown(st.session_state["file_summaries"])
 
@@ -1664,6 +2962,160 @@ try:
             file_name="file_summaries_by_pdf.md",
             mime="text/markdown"
         )
+
+
+    st.subheader("학습 로드맵 생성")
+
+    roadmap_days = st.selectbox(
+        "학습 기간을 선택하세요.",
+        [3, 5, 7, 14, 28, 50, 100],
+        index=2,
+        help="학생이 직접 학습 기간을 선택하면, PDF 자료량에 맞춰 날짜별 학습 계획을 생성합니다."
+    )
+
+    if st.button("학습 로드맵 생성"):
+        file_summaries_for_roadmap = st.session_state.get("file_summaries", [])
+
+        roadmap_df = build_learning_roadmap_df(
+            chunks=chunks,
+            duration_days=roadmap_days,
+            file_summaries=file_summaries_for_roadmap
+        )
+
+        st.session_state["learning_roadmap_df"] = roadmap_df
+        st.session_state["learning_roadmap_days"] = roadmap_days
+
+    if st.session_state.get("learning_roadmap_df") is not None:
+        roadmap_df = st.session_state["learning_roadmap_df"]
+        roadmap_days = st.session_state["learning_roadmap_days"]
+
+        st.markdown(f"### {roadmap_days}일 학습 로드맵")
+        st.dataframe(roadmap_df, use_container_width=True)
+
+        roadmap_md = roadmap_df_to_markdown(roadmap_df, roadmap_days)
+
+        with st.expander("로드맵 Markdown 보기", expanded=False):
+            st.markdown(roadmap_md)
+
+        st.download_button(
+            label="학습 로드맵 다운로드",
+            data=roadmap_md,
+            file_name=f"learning_roadmap_{roadmap_days}days.md",
+            mime="text/markdown"
+        )
+
+
+        st.markdown("### 로드맵 Day별 학습 확인 문제 생성")
+        st.caption(
+            "선택한 날짜의 학습 범위에 해당하는 문제를 생성합니다. "
+            "진도 학습일은 해당 날짜 범위에서, 누적 복습/최종 점검일은 전체 누적 범위에서 생성합니다."
+        )
+
+        if "roadmap_day_quizzes" not in st.session_state:
+            st.session_state["roadmap_day_quizzes"] = {}
+
+        roadmap_quiz_col1, roadmap_quiz_col2, roadmap_quiz_col3, roadmap_quiz_col4 = st.columns(4)
+
+        with roadmap_quiz_col1:
+            selected_roadmap_day = st.selectbox(
+                "문제를 만들 Day",
+                list(range(1, int(roadmap_days) + 1)),
+                index=0,
+                key=f"roadmap_quiz_day_{roadmap_days}"
+            )
+
+        with roadmap_quiz_col2:
+            roadmap_quiz_count = st.selectbox(
+                "문제 수",
+                [1, 3, 5],
+                index=1,
+                key=f"roadmap_quiz_count_{roadmap_days}"
+            )
+
+        with roadmap_quiz_col3:
+            roadmap_question_type_mode = st.selectbox(
+                "문제 유형 구성",
+                ["혼합", "4지선다 객관식만", "OX 문제만", "빈칸 주관식만"],
+                index=0,
+                key=f"roadmap_quiz_type_{roadmap_days}"
+            )
+
+        with roadmap_quiz_col4:
+            roadmap_student_level = st.selectbox(
+                "난이도",
+                ["Level 1 - 초급", "Level 2 - 중급", "Level 3 - 상급", "Level 4 - 심화"],
+                index=1,
+                key=f"roadmap_quiz_level_{roadmap_days}"
+            )
+
+        selected_day_chunks = get_chunks_for_roadmap_day(
+            chunks=chunks,
+            duration_days=roadmap_days,
+            day=selected_roadmap_day
+        )
+        selected_day_scope = describe_chunks_scope(selected_day_chunks)
+
+        st.info(f"선택한 Day {selected_roadmap_day} 학습 범위: {selected_day_scope}")
+
+        if st.button("선택한 Day 학습 확인 문제 생성", key=f"generate_roadmap_quiz_{roadmap_days}"):
+            if not check_ollama_server(ollama_url):
+                st.error("Ollama 서버에 연결할 수 없습니다.")
+                st.stop()
+
+            with st.spinner(
+                f"로드맵 Day {selected_roadmap_day} 범위에서 학습 확인 문제 {roadmap_quiz_count}개를 생성하는 중입니다..."
+            ):
+                roadmap_quizzes = generate_roadmap_day_quizzes_with_ollama(
+                    ollama_url=ollama_url,
+                    model_name=ollama_model,
+                    chunks=chunks,
+                    duration_days=roadmap_days,
+                    day=selected_roadmap_day,
+                    quiz_count=roadmap_quiz_count,
+                    student_level=roadmap_student_level,
+                    question_type_mode=roadmap_question_type_mode,
+                    num_predict=num_predict_setting,
+                    stream_read_timeout=stream_timeout_setting,
+                    banned_terms=banned_terms
+                )
+
+            roadmap_quiz_key = f"{roadmap_days}_days_day_{selected_roadmap_day}"
+            st.session_state["roadmap_day_quizzes"][roadmap_quiz_key] = {
+                "duration_days": roadmap_days,
+                "day": selected_roadmap_day,
+                "scope": selected_day_scope,
+                "quizzes": roadmap_quizzes
+            }
+            st.success(f"Day {selected_roadmap_day} 학습 확인 문제 {len(roadmap_quizzes)}개 생성 완료")
+
+        roadmap_quiz_key = f"{roadmap_days}_days_day_{selected_roadmap_day}"
+
+        if st.session_state["roadmap_day_quizzes"].get(roadmap_quiz_key):
+            saved_item = st.session_state["roadmap_day_quizzes"][roadmap_quiz_key]
+            roadmap_quizzes = saved_item.get("quizzes", [])
+            saved_scope = saved_item.get("scope", selected_day_scope)
+
+            st.markdown(f"#### Day {selected_roadmap_day} 생성된 학습 확인 문제")
+            st.caption(f"학습 범위: {saved_scope}")
+
+            for quiz_idx, quiz in enumerate(roadmap_quizzes, start=1):
+                render_quiz_for_review(quiz, quiz_idx)
+                st.divider()
+
+            roadmap_quiz_md = roadmap_day_quizzes_to_markdown(
+                duration_days=roadmap_days,
+                day=selected_roadmap_day,
+                scope_text=saved_scope,
+                quizzes=roadmap_quizzes
+            )
+
+            st.download_button(
+                label="로드맵 Day 학습 확인 문제 다운로드",
+                data=roadmap_quiz_md,
+                file_name=f"roadmap_day_{selected_roadmap_day}_quizzes.md",
+                mime="text/markdown",
+                key=f"download_roadmap_quiz_{roadmap_days}_{selected_roadmap_day}"
+            )
 
     st.subheader("2단계: ChromaDB 저장")
 
@@ -1810,94 +3262,158 @@ try:
                 banned_terms=banned_terms
             )
 
+        st.session_state["latest_user_quiz"] = quiz
+        st.session_state["latest_user_question_intent"] = question_intent
+        st.success("학생 요청 기반 문제 1개 생성 완료")
+
+
+    if st.session_state.get("latest_user_quiz"):
         st.divider()
         st.subheader("생성된 문제")
-
-        if quiz.get("concept") == "generation_error":
-            st.error("문제 생성에 실패했습니다. 아래 내용을 확인하세요.")
-
-        polarity_label = "부정형 문제" if quiz.get("question_polarity") == "negative" else "긍정형 문제"
-        st.caption(f"문항 방향: {polarity_label} / 질문 의도: {question_intent}")
-
-        if quiz.get("warnings"):
-            for warning in quiz["warnings"]:
-                st.warning(warning)
-
-        st.markdown(f"### Q. {quiz.get('question', '')}")
-
-        choices = quiz.get("choices", [])
-        question_type_value = quiz.get("question_type", "multiple_choice")
-
-        if question_type_value == "multiple_choice":
-            if choices:
-                for idx, choice in enumerate(choices, start=1):
-                    st.write(f"{idx}. {choice}")
-
-        elif question_type_value == "fill_blank":
-            st.info("빈칸 주관식 문항입니다. 빈칸에 들어갈 단어 또는 짧은 구절을 답하면 됩니다.")
-
-        elif question_type_value == "ox":
-            st.info("OX 문항입니다. 설명이 옳으면 O, 틀리면 X를 선택하면 됩니다.")
-            st.write("1. O")
-            st.write("2. X")
-
-        else:
-            st.info("주관식 문항입니다. 보기는 제공되지 않습니다.")
-
-        st.markdown("### 정답")
-        
-        st.success(quiz.get("answer", ""))
-    
-
-        if quiz.get("grading_criteria"):
-            st.markdown("### 채점 기준")
-            for idx, item in enumerate(quiz.get("grading_criteria", []), start=1):
-                st.write(f"{idx}. {item}")
-
-        if quiz.get("part_summary"):
-            st.markdown("### 출제 파트 요약")
-            st.write(quiz.get("part_summary", ""))
-
-        if quiz.get("evidence_text"):
-            st.markdown("### 정답 근거")
-            st.info(quiz.get("evidence_text", ""))
-
-        st.markdown("### 해설")
-        st.write(quiz.get("explanation", ""))
-
-        if question_type_value == "multiple_choice" and quiz.get("choice_explanations"):
-            st.markdown("### 보기별 해설")
-
-            for idx, item in enumerate(quiz["choice_explanations"], start=1):
-                answer_tag = "정답" if item.get("is_answer") else "정답 아님"
-                factual_tag = "교안 내용과 일치" if item.get("is_factually_correct") else "교안 내용과 불일치"
-                st.markdown(
-                    f"**{idx}. {answer_tag} / {factual_tag}**  \n"
-                    f"{item.get('explanation', '')}"
-                )
-
-        st.markdown("### 힌트")
-        st.info(quiz.get("hint", ""))
-
-        st.markdown("### 근거 페이지")
-        source_pages = quiz.get("source_pages", [])
-        if source_pages:
-            st.write(", ".join(str(page) for page in source_pages))
-        else:
-            st.write([])
-
-        st.markdown("### 핵심 개념 / 난이도")
-        st.write({
-            "concept": quiz.get("concept", ""),
-            "difficulty": quiz.get("difficulty", "")
-        })
+        st.caption(
+            "학생 요청 기반 문제 생성은 기존처럼 1개만 생성됩니다. "
+            "답을 제출하면 채점 후 정답, 해설, 정답 근거가 공개되고 풀이 기록에 저장됩니다."
+        )
+        render_interactive_quiz(
+            quiz=st.session_state["latest_user_quiz"],
+            idx=1,
+            origin="학생 요청 문제",
+            origin_key="latest_user_quiz",
+            title="문제"
+        )
 
         st.download_button(
             label="생성된 문제 JSON 다운로드",
-            data=json.dumps(quiz, ensure_ascii=False, indent=2),
+            data=json.dumps(st.session_state["latest_user_quiz"], ensure_ascii=False, indent=2),
             file_name="generated_quiz.json",
             mime="application/json"
         )
+
+    st.divider()
+    st.subheader("4단계: 학습 상태 분석 및 보충 문제 생성")
+
+    attempts = st.session_state.get("attempts", [])
+
+    if not attempts:
+        st.info("문제를 풀고 채점하면 이곳에 취약 개념, 틀린 개념, 흔들리는 개념이 자동으로 정리됩니다.")
+    else:
+        mastery_df = analyze_concept_mastery(attempts)
+
+        st.markdown("### 개념별 학습 상태")
+        st.dataframe(mastery_df, use_container_width=True)
+
+        with st.expander("전체 풀이 기록 보기", expanded=False):
+            attempts_df = pd.DataFrame(attempts)
+            st.dataframe(attempts_df, use_container_width=True)
+
+        st.download_button(
+            label="풀이 기록 JSON 다운로드",
+            data=json.dumps(attempts, ensure_ascii=False, indent=2),
+            file_name="learning_attempts.json",
+            mime="application/json"
+        )
+
+        if st.button("풀이 기록 초기화"):
+            st.session_state["attempts"] = []
+            st.session_state["graded_results"] = {}
+            st.session_state["remedial_quizzes"] = {}
+            st.rerun()
+
+        target_concepts = get_target_concepts_for_remedial(mastery_df)
+
+        if target_concepts:
+            st.markdown("### 부족한 개념 보충 문제 생성")
+            st.caption("틀린 개념, 취약 개념, 흔들리는 개념을 바탕으로 관련 문제를 추가 생성합니다.")
+
+            remedial_col1, remedial_col2, remedial_col3, remedial_col4 = st.columns(4)
+
+            with remedial_col1:
+                selected_concept = st.selectbox(
+                    "보충 학습할 개념",
+                    target_concepts,
+                    index=0,
+                    key="selected_remedial_concept"
+                )
+
+            with remedial_col2:
+                remedial_count = st.selectbox(
+                    "문제 수",
+                    [1, 3, 5],
+                    index=1,
+                    key="remedial_count"
+                )
+
+            with remedial_col3:
+                remedial_type_mode = st.selectbox(
+                    "문제 유형 구성",
+                    ["혼합", "4지선다 객관식만", "OX 문제만", "빈칸 주관식만"],
+                    index=0,
+                    key="remedial_type_mode"
+                )
+
+            with remedial_col4:
+                remedial_level = st.selectbox(
+                    "난이도",
+                    ["Level 1 - 초급", "Level 2 - 중급", "Level 3 - 상급", "Level 4 - 심화"],
+                    index=1,
+                    key="remedial_level"
+                )
+
+            if st.button("부족한 개념 보충 문제 생성"):
+                if not check_ollama_server(ollama_url):
+                    st.error("Ollama 서버에 연결할 수 없습니다.")
+                    st.stop()
+
+                embedding_model = load_embedding_model()
+                client = get_chroma_client()
+                collection = client.get_collection(name=st.session_state["collection_name"])
+
+                with st.spinner(f"'{selected_concept}' 개념 보충 문제 {remedial_count}개를 생성하는 중입니다..."):
+                    remedial_quizzes = generate_remedial_quizzes_with_ollama(
+                        ollama_url=ollama_url,
+                        model_name=ollama_model,
+                        collection=collection,
+                        embedding_model=embedding_model,
+                        target_concept=selected_concept,
+                        quiz_count=remedial_count,
+                        student_level=remedial_level,
+                        question_type_mode=remedial_type_mode,
+                        top_k=top_k,
+                        extra_keywords=extra_keywords,
+                        num_predict=num_predict_setting,
+                        stream_read_timeout=stream_timeout_setting,
+                        banned_terms=banned_terms
+                    )
+
+                remedial_key = make_safe_id(selected_concept)
+                st.session_state["remedial_quizzes"][remedial_key] = {
+                    "concept": selected_concept,
+                    "quizzes": remedial_quizzes
+                }
+                st.success(f"'{selected_concept}' 보충 문제 {len(remedial_quizzes)}개 생성 완료")
+
+            selected_remedial_key = make_safe_id(st.session_state.get("selected_remedial_concept", target_concepts[0]))
+
+            if st.session_state["remedial_quizzes"].get(selected_remedial_key):
+                saved_remedial = st.session_state["remedial_quizzes"][selected_remedial_key]
+                remedial_quizzes = saved_remedial.get("quizzes", [])
+                concept_name = saved_remedial.get("concept", "")
+
+                st.markdown(f"#### '{concept_name}' 보충 문제")
+
+                for quiz_idx, quiz in enumerate(remedial_quizzes, start=1):
+                    render_quiz_for_review(quiz, quiz_idx)
+                    st.divider()
+
+                remedial_md = review_quizzes_to_markdown(f"{concept_name}_보충", remedial_quizzes)
+
+                st.download_button(
+                    label="보충 문제 다운로드",
+                    data=remedial_md,
+                    file_name=f"remedial_quizzes_{make_safe_id(concept_name)}.md",
+                    mime="text/markdown",
+                    key=f"download_remedial_{selected_remedial_key}"
+                )
 
 except Exception as e:
     st.error("처리 중 오류가 발생했습니다.")
