@@ -41,13 +41,27 @@ def get_chroma_client():
 # 2. PDF 처리
 # =========================
 
-def extract_text_from_pdf(file_bytes: bytes) -> List[Dict[str, Any]]:
+def make_safe_id(text: str) -> str:
+    """
+    파일명/자료명을 ChromaDB id에 안전하게 넣기 위한 보조 함수.
+    """
+    safe = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", str(text)).strip("_")
+    return safe[:80] if safe else "material"
+
+
+def extract_text_from_pdf(
+    file_bytes: bytes,
+    file_name: str = "uploaded.pdf",
+    material_id: str = "material"
+) -> List[Dict[str, Any]]:
     pages = []
 
     with pymupdf.open(stream=file_bytes, filetype="pdf") as doc:
         for page_index, page in enumerate(doc, start=1):
             text = page.get_text("text").strip()
             pages.append({
+                "material_id": material_id,
+                "file_name": file_name,
                 "page": page_index,
                 "text": text,
                 "char_count": len(text)
@@ -87,13 +101,17 @@ def make_chunks_from_pages(
     for page in pages:
         page_num = page["page"]
         text = page["text"]
+        file_name = str(page.get("file_name", "uploaded.pdf"))
+        material_id = str(page.get("material_id", make_safe_id(file_name)))
 
         if not text:
             continue
 
         for idx, chunk_text in enumerate(split_text(text, chunk_size, chunk_overlap), start=1):
             chunks.append({
-                "chunk_id": f"p{page_num}_c{idx}",
+                "chunk_id": f"{material_id}_p{page_num}_c{idx}",
+                "material_id": material_id,
+                "file_name": file_name,
                 "page": page_num,
                 "text": chunk_text,
                 "char_count": len(chunk_text),
@@ -242,6 +260,8 @@ def store_chunks_in_chroma(collection, chunks: List[Dict[str, Any]], embedding_m
         docs.append(text)
         metas.append({
             "page": int(chunk["page"]),
+            "file_name": str(chunk.get("file_name", "")),
+            "material_id": str(chunk.get("material_id", "")),
             "char_count": int(chunk.get("char_count", len(text))),
             "quality_score": int(chunk.get("quality_score", estimate_chunk_quality(text)))
         })
@@ -312,6 +332,8 @@ def search_chunks(
 
         candidates.append({
             "chunk_id": chunk_id,
+            "file_name": meta.get("file_name", ""),
+            "material_id": meta.get("material_id", ""),
             "page": meta.get("page"),
             "distance": distance,
             "text": doc,
@@ -417,7 +439,6 @@ def build_quiz_prompt(
 
     context_blocks = []
 
-    # 핵심: 너무 길게 넣지 않는다. 과한 프롬프트가 timeout과 환각을 만든다.
     per_chunk_limit = 750 if question_intent in ["comparison", "role_lookup", "general"] else 600
 
     for idx, chunk in enumerate(retrieved_chunks, start=1):
@@ -460,10 +481,44 @@ def build_quiz_prompt(
 """
     }.get(question_intent, "")
 
-    # 문제 유형 분기
-    is_fill_blank = "빈칸" in question_type or "주관식" in question_type
+    is_ox = "OX" in question_type or "O/X" in question_type or "ox" in question_type.lower()
+    is_fill_blank = (not is_ox) and ("빈칸" in question_type or "주관식" in question_type)
 
-    if is_fill_blank:
+    if is_ox:
+        type_rule = """
+[문제 유형별 규칙]
+- OX 문제를 만든다.
+- question은 반드시 "다음 설명이 옳으면 O, 틀리면 X를 고르시오:" 형식으로 작성한다.
+- choices는 반드시 ["O", "X"]로 작성한다.
+- answer는 반드시 "O" 또는 "X" 중 하나로만 작성한다.
+- 자동 또는 긍정형 문제에서는 교안 내용과 일치하는 설명을 만들고 answer를 "O"로 작성한다.
+- 부정형 문제에서는 교안 내용과 명확히 어긋나는 설명을 만들고 answer를 "X"로 작성한다.
+- 설명문은 교안 근거에 나온 핵심 사실을 바탕으로 만든다.
+- 교안 근거에 없는 내용을 섞어서 판단하기 어려운 문장을 만들지 마라.
+- choice_explanations는 반드시 빈 리스트 []로 둔다.
+"""
+
+        output_format = f"""
+[출력 형식]
+{{
+  "question_type": "ox",
+  "question_polarity": "positive",
+  "question": "다음 설명이 옳으면 O, 틀리면 X를 고르시오: 교안 근거 기반 설명문",
+  "choices": ["O", "X"],
+  "answer": "O",
+  "part_summary": "출제 파트 요약",
+  "evidence_text": "정답 근거",
+  "explanation": "O 또는 X가 정답인 이유",
+  "choice_explanations": [],
+  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
+  "concept": "핵심 개념",
+  "difficulty": {level_num},
+  "hint": "정답을 직접 말하지 않는 짧은 힌트 한 문장",
+  "grading_criteria": []
+}}
+"""
+
+    elif is_fill_blank:
         type_rule = """
 [문제 유형별 규칙]
 - 빈칸 주관식 문제를 만든다.
@@ -474,7 +529,6 @@ def build_quiz_prompt(
 - choice_explanations도 반드시 빈 리스트 []로 둔다.
 - grading_criteria에는 채점 기준 3개를 작성한다.
 - 빈칸에는 교안 근거에 실제로 등장하거나, 교안 근거에서 직접 확인 가능한 핵심 용어가 들어가야 한다.
-- 질문은 단순 암기가 아니라 핵심 개념 이해를 확인할 수 있게 작성한다.
 - 정답을 문장 전체로 쓰지 말고, 빈칸에 들어갈 단어 또는 짧은 구절만 작성한다.
 """
 
@@ -501,6 +555,7 @@ def build_quiz_prompt(
   ]
 }}
 """
+
     else:
         type_rule = """
 [문제 유형별 규칙]
@@ -586,12 +641,13 @@ def build_quiz_prompt(
 - 빈칸 주관식이면 question에 반드시 "_____"를 정확히 한 번 포함한다.
 - 빈칸 주관식이면 answer는 빈칸에 들어갈 단어 또는 짧은 구절만 작성한다.
 - 빈칸 주관식이면 choices는 []로 둔다.
+- OX 문제이면 choices는 ["O", "X"]로 둔다.
+- OX 문제이면 answer는 반드시 "O" 또는 "X"로 작성한다.
 
 {type_rule}
 
 {output_format}
 """.strip()
-
 
 # =========================
 # 6. Ollama 호출
@@ -769,8 +825,9 @@ def build_summary_context_from_chunks(
 
     for chunk in good_chunks:
         page = chunk.get("page", "")
+        file_name = chunk.get("file_name", "")
         text = str(chunk.get("text", "")).strip()[:900]
-        block = f"[페이지 {page}]\n{text}\n"
+        block = f"[파일 {file_name} / 페이지 {page}]\n{text}\n"
 
         if current_len + len(block) > max_chars:
             break
@@ -974,6 +1031,79 @@ def generate_document_summary_with_ollama(
         return f"전체 요약 생성 실패: {e}"
 
 
+def group_chunks_by_material(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    여러 PDF 청크를 파일별로 묶는다.
+    파일별 핵심 요약과 이후 학습 로드맵 생성의 기본 단위가 된다.
+    """
+    grouped: Dict[str, Dict[str, Any]] = {}
+
+    for chunk in chunks:
+        file_name = str(chunk.get("file_name", "uploaded.pdf"))
+        material_id = str(chunk.get("material_id", make_safe_id(file_name)))
+
+        if material_id not in grouped:
+            grouped[material_id] = {
+                "material_id": material_id,
+                "file_name": file_name,
+                "chunks": []
+            }
+
+        grouped[material_id]["chunks"].append(chunk)
+
+    result = list(grouped.values())
+    result.sort(key=lambda x: x["file_name"])
+    return result
+
+
+def generate_document_summaries_by_file_with_ollama(
+    ollama_url: str,
+    model_name: str,
+    chunks: List[Dict[str, Any]],
+    num_predict: int,
+    stream_read_timeout: int
+) -> List[Dict[str, str]]:
+    """
+    여러 PDF를 파일별로 나누어 각각 핵심 요약을 생성한다.
+    """
+    summaries = []
+
+    for item in group_chunks_by_material(chunks):
+        file_name = item["file_name"]
+        material_id = item["material_id"]
+        file_chunks = item["chunks"]
+
+        summary = generate_document_summary_with_ollama(
+            ollama_url=ollama_url,
+            model_name=model_name,
+            chunks=file_chunks,
+            num_predict=num_predict,
+            stream_read_timeout=stream_read_timeout
+        )
+
+        summaries.append({
+            "material_id": material_id,
+            "file_name": file_name,
+            "summary": summary
+        })
+
+    return summaries
+
+
+def summaries_by_file_to_markdown(summaries: List[Dict[str, str]]) -> str:
+    """
+    파일별 요약 결과를 다운로드 가능한 하나의 Markdown 텍스트로 합친다.
+    """
+    parts = []
+
+    for item in summaries:
+        file_name = item.get("file_name", "uploaded.pdf")
+        summary = item.get("summary", "")
+        parts.append(f"# {file_name}\n\n{summary}")
+
+    return "\n\n---\n\n".join(parts).strip()
+
+
 # =========================
 # 7. 검증과 완화
 # =========================
@@ -1049,6 +1179,24 @@ def clean_quiz_schema(
         "hint": str(quiz.get("hint", "")).strip(),
         "grading_criteria": quiz.get("grading_criteria", [])
     }
+        # OX 문제 보정
+    if clean["question_type"] == "ox":
+        clean["choices"] = ["O", "X"]
+
+        answer_upper = str(clean["answer"]).strip().upper()
+
+        if answer_upper in ["O", "○", "TRUE", "참", "맞다", "옳다"]:
+            clean["answer"] = "O"
+        elif answer_upper in ["X", "×", "FALSE", "거짓", "틀리다", "아니다"]:
+            clean["answer"] = "X"
+
+        # OX 문제는 O/X 자체가 보기이므로 별도의 보기별 해설을 보여주지 않는다.
+        clean["choice_explanations"] = []
+        return clean
+
+    if clean["question_type"] == "fill_blank":
+        clean["choice_explanations"] = []
+        return clean
 
     raw_explanations = quiz.get("choice_explanations", [])
 
@@ -1087,6 +1235,21 @@ def basic_validate_quiz(quiz: Dict[str, Any]) -> Tuple[bool, str]:
         return False, "정답 또는 모범 답안이 비어 있습니다."
 
     question_type = quiz.get("question_type", "multiple_choice")
+
+    # OX 문제 검증
+    if question_type == "ox":
+        choices = quiz.get("choices", [])
+
+        if choices != ["O", "X"]:
+            return False, "OX 문제의 보기는 ['O', 'X']여야 합니다."
+
+        if answer not in ["O", "X"]:
+            return False, "OX 문제의 정답은 O 또는 X여야 합니다."
+
+        if len(str(quiz.get("question", ""))) > 220:
+            return False, "문제 문장이 너무 깁니다."
+
+        return True, "OX 문제 검증 통과"
 
     # 빈칸 주관식 검증
     if question_type == "fill_blank":
@@ -1356,56 +1519,92 @@ if st.sidebar.button("Ollama 연결 확인"):
         st.sidebar.error("Ollama 서버에 연결할 수 없습니다.")
 
 
-uploaded_pdf = st.file_uploader(
-    "PDF 강의자료를 업로드하세요.",
-    type=["pdf"]
+uploaded_pdfs = st.file_uploader(
+    "PDF 강의자료를 업로드하세요. 여러 개를 한 번에 선택할 수 있습니다.",
+    type=["pdf"],
+    accept_multiple_files=True
 )
 
-if uploaded_pdf is None:
-    st.info("먼저 PDF 강의자료를 업로드하세요.")
+if not uploaded_pdfs:
+    st.info("먼저 PDF 강의자료를 1개 이상 업로드하세요.")
     st.stop()
 
 try:
-    file_bytes = uploaded_pdf.read()
-
     st.subheader("1단계: PDF 텍스트 추출 및 청킹")
 
     if st.button("PDF 처리하기"):
-        with st.spinner("PDF에서 텍스트를 추출하는 중입니다..."):
-            pages = extract_text_from_pdf(file_bytes)
+        all_pages = []
+        all_chunks = []
+        material_rows = []
 
-        with st.spinner("텍스트를 청킹하는 중입니다..."):
-            chunks = make_chunks_from_pages(
-                pages,
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap
-            )
+        with st.spinner("여러 PDF에서 텍스트를 추출하고 청킹하는 중입니다..."):
+            for file_idx, uploaded_file in enumerate(uploaded_pdfs, start=1):
+                file_bytes = uploaded_file.read()
+                file_name = uploaded_file.name
+                material_id = make_safe_id(f"m{file_idx}_{file_name}")
 
-        st.session_state["pages"] = pages
-        st.session_state["chunks"] = chunks
+                pages = extract_text_from_pdf(
+                    file_bytes=file_bytes,
+                    file_name=file_name,
+                    material_id=material_id
+                )
 
-        st.success("PDF 처리 완료")
+                chunks = make_chunks_from_pages(
+                    pages,
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap
+                )
 
-        col1, col2, col3 = st.columns(3)
+                all_pages.extend(pages)
+                all_chunks.extend(chunks)
+
+                material_rows.append({
+                    "file_name": file_name,
+                    "material_id": material_id,
+                    "pages": len(pages),
+                    "chars": sum(p["char_count"] for p in pages),
+                    "chunks": len(chunks)
+                })
+
+        st.session_state["pages"] = all_pages
+        st.session_state["chunks"] = all_chunks
+        st.session_state["materials"] = material_rows
+
+        st.success(f"PDF {len(material_rows)}개 처리 완료")
+
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            st.metric("전체 페이지 수", len(pages))
+            st.metric("업로드 파일 수", len(material_rows))
 
         with col2:
-            st.metric("전체 글자 수", sum(p["char_count"] for p in pages))
+            st.metric("전체 페이지 수", len(all_pages))
 
         with col3:
-            st.metric("생성된 청크 수", len(chunks))
+            st.metric("전체 글자 수", sum(p["char_count"] for p in all_pages))
+
+        with col4:
+            st.metric("생성된 청크 수", len(all_chunks))
+
+        st.markdown("#### 처리된 파일 목록")
+        st.dataframe(pd.DataFrame(material_rows), use_container_width=True)
 
     if "chunks" not in st.session_state:
         st.stop()
 
     pages = st.session_state["pages"]
     chunks = st.session_state["chunks"]
+    materials = st.session_state.get("materials", [])
+
+    if materials:
+        with st.expander("업로드된 PDF 목록 보기", expanded=False):
+            st.dataframe(pd.DataFrame(materials), use_container_width=True)
 
     with st.expander("페이지별 텍스트 요약 보기", expanded=False):
         page_df = pd.DataFrame([
             {
+                "file_name": p.get("file_name", ""),
+                "material_id": p.get("material_id", ""),
                 "page": p["page"],
                 "char_count": p["char_count"],
                 "preview": p["text"][:150].replace("\n", " ")
@@ -1418,24 +1617,26 @@ try:
         chunk_df = pd.DataFrame([
             {
                 "chunk_id": c["chunk_id"],
+                "file_name": c.get("file_name", ""),
+                "material_id": c.get("material_id", ""),
                 "page": c["page"],
                 "char_count": c["char_count"],
                 "quality_score": c["quality_score"],
                 "preview": c["text"][:180].replace("\n", " ")
             }
-            for c in chunks[:80]
+            for c in chunks[:120]
         ])
         st.dataframe(chunk_df, use_container_width=True)
 
-    st.subheader("파일 내용 전체 핵심 요약")
+    st.subheader("파일별 핵심 요약")
 
-    if st.button("파일 전체 핵심 요약 생성"):
+    if st.button("파일별 핵심 요약 생성"):
         if not check_ollama_server(ollama_url):
             st.error("Ollama 서버에 연결할 수 없습니다.")
             st.stop()
 
-        with st.spinner("PDF 전체 핵심 요약을 생성하는 중입니다..."):
-            file_summary = generate_document_summary_with_ollama(
+        with st.spinner("PDF별 핵심 요약을 생성하는 중입니다..."):
+            file_summaries = generate_document_summaries_by_file_with_ollama(
                 ollama_url=ollama_url,
                 model_name=ollama_model,
                 chunks=chunks,
@@ -1443,16 +1644,24 @@ try:
                 stream_read_timeout=stream_timeout_setting
             )
 
-        st.session_state["file_summary"] = file_summary
+        st.session_state["file_summaries"] = file_summaries
 
-    if st.session_state.get("file_summary"):
-        st.markdown("### 전체 핵심 요약")
-        st.markdown(st.session_state["file_summary"])
+    if st.session_state.get("file_summaries"):
+        st.markdown("### PDF별 핵심 요약")
+
+        for item in st.session_state["file_summaries"]:
+            file_name = item.get("file_name", "uploaded.pdf")
+            summary = item.get("summary", "")
+
+            with st.expander(f"📄 {file_name}", expanded=True):
+                st.markdown(summary)
+
+        all_summaries_md = summaries_by_file_to_markdown(st.session_state["file_summaries"])
 
         st.download_button(
-            label="전체 요약 다운로드",
-            data=st.session_state["file_summary"],
-            file_name="file_summary.md",
+            label="파일별 전체 요약 다운로드",
+            data=all_summaries_md,
+            file_name="file_summaries_by_pdf.md",
             mime="text/markdown"
         )
 
@@ -1469,7 +1678,7 @@ try:
         st.session_state["collection_ready"] = True
         st.session_state["collection_name"] = collection_name
 
-        st.success(f"{saved}개 청크를 저장했습니다.")
+        st.success(f"{len(st.session_state.get('materials', []))}개 PDF의 {saved}개 청크를 저장했습니다.")
 
     if not st.session_state.get("collection_ready"):
         st.stop()
@@ -1494,7 +1703,7 @@ try:
     with col2:
         question_type = st.selectbox(
             "문제 유형",
-            ["4지선다 객관식", "빈칸 주관식"],
+            ["4지선다 객관식", "빈칸 주관식", "OX 문제"],
             index=0
         )
 
@@ -1549,6 +1758,7 @@ try:
             {
                 "rank": idx + 1,
                 "chunk_id": item["chunk_id"],
+                "file_name": item.get("file_name", ""),
                 "page": item["page"],
                 "distance": round(item["distance"], 4),
                 "quality_score": item["quality_score"],
@@ -1562,7 +1772,7 @@ try:
 
         with st.expander("검색된 청크 원문 보기"):
             for idx, item in enumerate(retrieved, start=1):
-                st.markdown(f"### Rank {idx} | Page {item['page']} | {item['chunk_id']}")
+                st.markdown(f"### Rank {idx} | {item.get('file_name', '')} | Page {item['page']} | {item['chunk_id']}")
                 st.write(item["text"])
 
         allowed_pages = [
@@ -1622,12 +1832,20 @@ try:
             if choices:
                 for idx, choice in enumerate(choices, start=1):
                     st.write(f"{idx}. {choice}")
+
         elif question_type_value == "fill_blank":
-             st.info("빈칸 주관식 문항입니다. 빈칸에 들어갈 단어 또는 짧은 구절을 답하면 됩니다.")
+            st.info("빈칸 주관식 문항입니다. 빈칸에 들어갈 단어 또는 짧은 구절을 답하면 됩니다.")
+
+        elif question_type_value == "ox":
+            st.info("OX 문항입니다. 설명이 옳으면 O, 틀리면 X를 선택하면 됩니다.")
+            st.write("1. O")
+            st.write("2. X")
+
         else:
-             st.info("주관식 문항입니다. 보기는 제공되지 않습니다.")
+            st.info("주관식 문항입니다. 보기는 제공되지 않습니다.")
 
         st.markdown("### 정답")
+        
         st.success(quiz.get("answer", ""))
     
 
