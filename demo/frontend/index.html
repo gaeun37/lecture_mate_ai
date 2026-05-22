@@ -11,34 +11,31 @@
     tailwind.config = {
       theme: { extend: {
         fontFamily: { sans: ['Noto Sans KR', 'sans-serif'] },
-        colors: {
-          primary: '#245BFF', primaryDark: '#1744D3', surface: '#F7F8FC',
-          outline: '#E1E5F0', subtext: '#667085',
-          softblue: '#EAF0FF', greenSoft: '#EAF8EF', redSoft: '#FDECEC'
-        }
+        colors: { primary:'#245BFF', primaryDark:'#1744D3', surface:'#F7F8FC', outline:'#E1E5F0', subtext:'#667085', softblue:'#EAF0FF', greenSoft:'#EAF8EF', redSoft:'#FDECEC' }
       }}
     }
   </script>
   <style>
-    body { font-family: 'Noto Sans KR', sans-serif; background:#F7F8FC; }
-    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 500, 'GRAD' 0, 'opsz' 24; }
+    body { font-family:'Noto Sans KR', sans-serif; background:#F7F8FC; }
+    .material-symbols-outlined {
+      font-family:'Material Symbols Outlined'; font-variation-settings:'FILL' 0,'wght' 500,'GRAD' 0,'opsz' 24;
+      font-size:24px; line-height:1; width:24px; min-width:24px; overflow:hidden; white-space:nowrap;
+      display:inline-flex; align-items:center; justify-content:center;
+    }
     .screen { display:none; } .screen.active { display:block; }
-    .nav-active { background: rgba(36,91,255,.11); color:#245BFF; border-left:4px solid #245BFF; }
+    .nav-active { background:rgba(36,91,255,.11); color:#245BFF; border-left:4px solid #245BFF; }
     .nav-item { border-left:4px solid transparent; }
-    .shadow-soft { box-shadow: 0 12px 34px rgba(16,24,40,.07); }
+    .shadow-soft { box-shadow:0 12px 34px rgba(16,24,40,.07); }
     .source-box { border-left:4px solid #245BFF; background:#F4F7FF; }
+    .nav-btn { min-height:48px; }
+    .nav-btn span:last-child { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   </style>
 </head>
 <body class="text-slate-900">
-  <aside class="fixed left-0 top-0 h-screen w-[264px] bg-white border-r border-outline flex flex-col z-30">
+  <aside class="fixed left-0 top-0 h-screen w-[280px] bg-white border-r border-outline flex flex-col z-30">
     <div class="h-20 px-6 flex items-center gap-3 border-b border-outline">
-      <div class="w-11 h-11 rounded-2xl bg-primary text-white flex items-center justify-center">
-        <span class="material-symbols-outlined">school</span>
-      </div>
-      <div>
-        <h1 class="font-extrabold text-lg">강의메이트 AI</h1>
-        <p class="text-xs text-subtext">FastAPI 연결형 데모</p>
-      </div>
+      <div class="w-11 h-11 rounded-2xl bg-primary text-white flex items-center justify-center"><span class="material-symbols-outlined">school</span></div>
+      <div><h1 class="font-extrabold text-lg">강의메이트 AI</h1><p class="text-xs text-subtext">FastAPI 연결형 데모</p></div>
     </div>
     <nav class="flex-1 py-4">
       <button data-screen="home" class="nav-btn nav-item nav-active w-full px-5 py-3 flex items-center gap-3 text-left hover:bg-surface"><span class="material-symbols-outlined">home</span><span class="font-semibold">홈</span></button>
@@ -51,363 +48,327 @@
       <button data-screen="advisor" class="nav-btn nav-item w-full px-5 py-3 flex items-center gap-3 text-left hover:bg-surface"><span class="material-symbols-outlined">auto_awesome</span><span class="font-semibold">AI 어드바이저</span></button>
       <button data-screen="dashboard" class="nav-btn nav-item w-full px-5 py-3 flex items-center gap-3 text-left hover:bg-surface"><span class="material-symbols-outlined">dashboard</span><span class="font-semibold">학습 대시보드</span></button>
     </nav>
-    <div class="p-4 border-t border-outline">
-      <div class="rounded-2xl bg-softblue p-4 text-sm">
-        <p class="font-bold text-primary">학습 자료</p>
-        <p class="text-subtext mt-1">PDF 업로드 후 실제 자료 기반으로 동작</p>
-      </div>
-    </div>
+    <div class="p-4 border-t border-outline"><div class="rounded-2xl bg-softblue p-4 text-sm"><p class="font-bold text-primary">학습 자료</p><p class="text-subtext mt-1">PDF 업로드 후 실제 자료 기반으로 동작</p></div></div>
   </aside>
 
-  <header class="fixed top-0 left-[264px] right-0 h-20 bg-white/90 backdrop-blur border-b border-outline z-20 px-8 flex items-center justify-between">
-    <div>
-      <p id="breadcrumb" class="text-sm text-subtext">홈</p>
-      <h2 id="page-title" class="text-2xl font-extrabold">한국사 강의자료 기반 AI 학습지원 MVP</h2>
-    </div>
+  <header class="fixed top-0 left-[280px] right-0 h-20 bg-white/90 backdrop-blur border-b border-outline z-20 px-8 flex items-center justify-between">
+    <div><p id="breadcrumb" class="text-sm text-subtext">홈</p><h2 id="page-title" class="text-2xl font-extrabold">한국사 강의자료 기반 AI 학습지원 MVP</h2></div>
     <div class="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center font-bold">가</div>
   </header>
 
-  <main class="ml-[264px] pt-24 px-8 pb-10">
-    <section id="home" class="screen active"></section>
-    <section id="upload" class="screen"></section>
-    <section id="analysis" class="screen"></section>
-    <section id="tutor" class="screen"></section>
-    <section id="quiz" class="screen"></section>
-    <section id="solve" class="screen"></section>
-    <section id="wrong" class="screen"></section>
-    <section id="advisor" class="screen"></section>
-    <section id="dashboard" class="screen"></section>
+  <main class="ml-[280px] pt-24 px-8 pb-10">
+    <section id="home" class="screen active"></section><section id="upload" class="screen"></section><section id="analysis" class="screen"></section><section id="tutor" class="screen"></section><section id="quiz" class="screen"></section><section id="solve" class="screen"></section><section id="wrong" class="screen"></section><section id="advisor" class="screen"></section><section id="dashboard" class="screen"></section>
   </main>
 
 <script>
 const API = "";
-const titles = {
-  home: '나의 AI 학습 코치',
-  upload: '강의자료 업로드',
-  analysis: '자료 분석',
-  tutor: 'AI 튜터',
-  quiz: '문제 생성',
-  solve: '문제 풀이',
-  wrong: '오답노트',
-  advisor: 'AI 어드바이저',
-  dashboard: '학습 대시보드'
-};
+const titles = { home:'나의 AI 학습 코치', upload:'강의자료 업로드', analysis:'자료 분석', tutor:'AI 튜터', quiz:'문제 생성', solve:'문제 풀이', wrong:'오답노트', advisor:'AI 어드바이저', dashboard:'학습 대시보드' };
+let state = { materials:{materials:[]}, summary:{summary:"",keywords:[],concepts:[]}, questions:{questions:[]}, flashcards:null, wrong:{wrong_notes:[]}, weak:{weak_concepts:[]}, plan:{study_plan:[]}, dashboard:{total_solved:0,correct_count:0,wrong_count:0,accuracy:0,recommended_next:"자료를 업로드하고 문제를 풀어보세요."}, currentMaterialId:null, tutorMessages:[], currentTutorInput:"고조선부터 후삼국까지 흐름을 간단히 설명해줘." };
 
-let state = { materials:null, summary:null, questions:null, flashcards:null, wrong:null, weak:null, plan:null, dashboard:null };
+async function apiGet(path){ const res=await fetch(API+path); if(!res.ok) throw new Error(path); return await res.json(); }
+async function apiPost(path,body){ const res=await fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}); if(!res.ok) throw new Error(path); return await res.json(); }
+function escapeHtml(text){ return String(text ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;"); }
+function sourceBox(source){ return `<div class="source-box rounded-xl p-4 text-sm mt-3"><b>출처</b>: ${escapeHtml(source.file_name || '자료')} p.${source.page || source.source_page || '-'}<br/><span class="text-subtext">${escapeHtml(source.evidence || '')}</span></div>`; }
+function card(html){ return `<div class="bg-white rounded-3xl border border-outline shadow-soft p-8">${html}</div>`; }
 
-async function apiGet(path) {
-  const res = await fetch(API + path);
-  if (!res.ok) throw new Error(path);
-  return await res.json();
-}
-async function apiPost(path, body) {
-  const res = await fetch(API + path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
-  if (!res.ok) throw new Error(path);
-  return await res.json();
-}
-function sourceBox(source) {
-  return `<div class="source-box rounded-xl p-4 text-sm mt-3">
-    <b>출처</b>: ${source.file_name || '자료'} p.${source.page || source.source_page || '-'}<br/>
-    <span class="text-subtext">${source.evidence || ''}</span>
-  </div>`;
-}
-function card(html) { return `<div class="bg-white rounded-3xl border border-outline shadow-soft p-8">${html}</div>`; }
+function markdownToHtml(md){
+  const lines = String(md || "").split("\n");
+  let html = "";
+  let inList = false;
 
-async function loadAll() {
+  function closeList(){
+    if(inList){ html += "</ul>"; inList = false; }
+  }
+
+  for(const raw of lines){
+    const line = raw.trim();
+    if(!line) { closeList(); html += "<br/>"; continue; }
+
+    if(line.startsWith("## ")){
+      closeList();
+      html += `<h3 class="text-2xl font-extrabold mt-7 mb-3">${escapeHtml(line.replace(/^##\s*/, ""))}</h3>`;
+    } else if(line.startsWith("# ")){
+      closeList();
+      html += `<h2 class="text-3xl font-extrabold mt-7 mb-3">${escapeHtml(line.replace(/^#\s*/, ""))}</h2>`;
+    } else if(line.startsWith("- ")){
+      if(!inList){ html += `<ul class="list-disc pl-6 space-y-2 leading-8">`; inList = true; }
+      html += `<li>${escapeHtml(line.replace(/^-\s*/, ""))}</li>`;
+    } else {
+      closeList();
+      html += `<p class="leading-8">${escapeHtml(line)}</p>`;
+    }
+  }
+  closeList();
+  return html;
+}
+
+function renderSummaryContent(s){
+  if(s && s.raw_markdown){
+    return markdownToHtml(s.raw_markdown);
+  }
+  return `<p id="analysis-summary-text" class="leading-8 text-[17px] whitespace-pre-line">${escapeHtml((s && s.summary) || "요약 정보가 없습니다.")}</p>`;
+}
+
+function renderKeywordChips(keywords){
+  const arr = keywords || [];
+  return arr.length
+    ? arr.map(k=>`<span class="inline-flex rounded-full bg-softblue text-primary px-3 py-1.5 text-sm font-bold mr-2 mb-2">#${escapeHtml(k)}</span>`).join("")
+    : '<span class="text-subtext">키워드가 없습니다.</span>';
+}
+
+function renderConceptCards(concepts){
+  const arr = concepts || [];
+  return arr.length
+    ? arr.map(c=>`<div class="rounded-2xl bg-surface border border-outline p-4"><p class="font-bold">${escapeHtml(c.name||"핵심 개념")}</p><p class="text-sm text-subtext mt-1">${escapeHtml(c.summary||"")}</p><p class="text-xs text-primary font-bold mt-2">출처 p.${c.source_page || c.page || "-"}</p></div>`).join("")
+    : '<p class="text-subtext">개념 카드가 없습니다.</p>';
+}
+
+function renderDetailedFeedback(res){
+  const choices = res.choice_explanations || [];
+  const pages = res.source_pages || [];
+  const criteria = res.grading_criteria || [];
+  let html = "";
+
+  html += `<div class="${res.is_correct ? "text-green-700" : "text-red-700"} font-bold mb-3">${res.is_correct ? "정답입니다." : "오답입니다."}</div>`;
+
+  html += `<h4 class="font-extrabold text-lg mt-4 mb-2">정답</h4>`;
+  html += `<div class="rounded-xl bg-greenSoft text-green-700 p-4 mb-4">${escapeHtml(res.correct_answer || "")}</div>`;
+
+  if(res.part_summary){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">출제 파트 요약</h4>`;
+    html += `<p class="leading-7 mb-4">${escapeHtml(res.part_summary)}</p>`;
+  }
+
+  if(res.evidence_text){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">정답 근거</h4>`;
+    html += `<div class="rounded-xl bg-softblue text-primary p-4 mb-4 leading-7">${escapeHtml(res.evidence_text)}</div>`;
+  }
+
+  if(res.explanation){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">해설</h4>`;
+    html += `<p class="leading-7 mb-4">${escapeHtml(res.explanation)}</p>`;
+  }
+
+  if(choices.length){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">보기별 해설</h4>`;
+    html += `<div class="space-y-3">`;
+    choices.forEach((item, idx)=>{
+      html += `<div class="rounded-xl border border-outline p-4">
+        <p class="font-bold">${idx+1}. ${escapeHtml(item.choice || "")}</p>
+        <p class="${item.is_answer ? "text-green-700" : "text-subtext"} text-sm mt-1">${item.is_answer ? "정답" : "정답 아님"} / ${item.is_factually_correct ? "교안 내용과 일치" : "교안 내용과 불일치"}</p>
+        <p class="text-sm mt-2 leading-7">${escapeHtml(item.explanation || "")}</p>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  if(res.hint){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">힌트</h4>`;
+    html += `<div class="rounded-xl bg-softblue text-primary p-4 mb-4">${escapeHtml(res.hint)}</div>`;
+  }
+
+  if(pages.length){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">근거 페이지</h4>`;
+    html += `<p class="mb-4">${pages.map(p=>escapeHtml(p)).join(", ")}</p>`;
+  }
+
+  if(res.concept || res.difficulty){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">핵심 개념 / 난이도</h4>`;
+    html += `<p class="mb-4">${escapeHtml(res.concept || "")} ${res.difficulty ? " / Level " + escapeHtml(res.difficulty) : ""}</p>`;
+  }
+
+  if(criteria.length){
+    html += `<h4 class="font-extrabold text-lg mt-4 mb-2">채점 기준</h4>`;
+    html += `<ol class="list-decimal pl-6 space-y-2">${criteria.map(c=>`<li>${escapeHtml(c)}</li>`).join("")}</ol>`;
+  }
+
+  return html;
+}
+
+async function loadAll(){
   state.materials = await apiGet("/api/materials?user_id=1");
   state.summary = await apiGet("/api/materials/summary?user_id=1");
   state.questions = await apiGet("/api/review/questions?user_id=1");
-  state.flashcards = await apiGet("/api/review/flashcards?user_id=1");
   state.wrong = await apiGet("/api/wrong-notes?user_id=1");
   state.weak = await apiGet("/api/weak-concepts?user_id=1");
   state.plan = await apiGet("/api/study-plan?user_id=1");
   state.dashboard = await apiGet("/api/dashboard/summary?user_id=1");
   renderAll();
 }
+function renderAll(){ renderHome(); renderUpload(); renderAnalysis(); renderTutor(); renderQuiz(); renderSolve(); renderWrong(); renderAdvisor(); renderDashboard(); }
 
-function renderAll() {
-  renderHome(); renderUpload(); renderAnalysis(); renderTutor(); renderQuiz(); renderSolve(); renderWrong(); renderAdvisor(); renderDashboard();
-}
-
-function renderHome() {
-  const d = state.dashboard;
+function renderHome(){
+  const d=state.dashboard; const materials=(state.materials.materials||[]); const qs=(state.questions.questions||[]);
   document.getElementById('home').innerHTML = `
     <div class="rounded-[28px] bg-gradient-to-br from-primary to-primaryDark text-white p-9 shadow-soft mb-7">
-      <div class="inline-flex items-center gap-2 bg-white/15 px-3 py-1.5 rounded-full text-sm mb-5">
-        <span class="material-symbols-outlined text-base">sync_alt</span> HTML UI ↔ FastAPI 연결형
-      </div>
-      <h3 class="text-4xl font-extrabold mb-4">AI 학습지원 서비스</h3>
-      <p class="text-white/85 max-w-3xl"></p>
+      <div class="inline-flex items-center gap-2 bg-white/15 px-3 py-1.5 rounded-full text-sm mb-5"><span class="material-symbols-outlined text-base">sync_alt</span> HTML UI ↔ FastAPI 연결형</div>
+      <h3 class="text-4xl font-extrabold mb-4">AI 학습지원 서비스</h3><p class="text-white/85 max-w-3xl">강의자료 기반 요약, 질의응답, 문제 생성, 풀이 기록을 제공합니다.</p>
     </div>
     <div class="grid grid-cols-4 gap-5 mb-7">
-      <div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">선별 자료</p><p class="text-3xl font-extrabold mt-2">${state.materials.materials.length}개</p></div>
-      <div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">생성 문제</p><p class="text-3xl font-extrabold mt-2">${state.questions.questions.length}개</p></div>
+      <div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">선별 자료</p><p class="text-3xl font-extrabold mt-2">${materials.length}개</p></div>
+      <div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">생성 문제</p><p class="text-3xl font-extrabold mt-2">${qs.length}개</p></div>
       <div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">풀이 기록</p><p class="text-3xl font-extrabold mt-2">${d.total_solved}개</p></div>
       <div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">정답률</p><p class="text-3xl font-extrabold mt-2">${d.accuracy}%</p></div>
-    </div>
-    ${card(`<h3 class="text-xl font-bold mb-4">오늘의 학습 추천</h3>
-  <div class="rounded-3xl bg-softblue p-6">
-    <p class="text-sm text-subtext mb-2">오답 기록 기반 추천</p>
-    <p class="text-xl font-extrabold">고구려 멸망 이후 유민 이동과 발해 성립 배경 복습</p>
-    <p class="text-subtext mt-2">고구려 유민의 이동 경로와 발해 건국 배경을 연결해서 복습해보세요.</p>
-  </div>`)}
+    </div>${card(`<h3 class="text-xl font-bold mb-4">오늘의 학습 추천</h3><div class="rounded-3xl bg-softblue p-6"><p class="text-sm text-subtext mb-2">기록 기반 추천</p><p class="text-xl font-extrabold">${escapeHtml(d.recommended_next || "자료를 업로드하고 문제를 풀어보세요.")}</p></div>`)}
   `;
 }
-
-function renderUpload() {
-  document.getElementById('upload').innerHTML = `
-    <div class="grid grid-cols-12 gap-6">
-      <div class="col-span-7">${card(`<h3 class="text-2xl font-extrabold mb-2">강의자료 업로드</h3>
-        <p class="text-subtext mb-6">텍스트 추출 가능한 PDF를 업로드하면 실제로 텍스트 추출, 청킹, 임베딩, ChromaDB 저장을 수행합니다.</p>
-        <div class="border-2 border-dashed border-primary/30 bg-softblue rounded-3xl p-10 text-center">
-          <span class="material-symbols-outlined text-primary text-6xl">cloud_upload</span>
-          <p class="text-xl font-bold mt-3">PDF 파일 업로드</p>
-          <p class="text-subtext mt-2">여러 개의 PDF를 동시에 선택할 수 있습니다.</p>
-
-          <input id="pdf-files" type="file" multiple accept=".pdf"
-            class="mt-5 block w-full text-sm text-subtext bg-white rounded-xl border border-outline p-3" />
-
-          <button onclick="uploadPDFs()"
-            class="mt-5 bg-primary text-white rounded-xl px-6 py-3 font-bold">
-            PDF 분석 시작
-          </button>
-
-          <div id="upload-result" class="mt-4 text-sm"></div>
-        </div>`)}
-      </div>
-      <div class="col-span-5">${card(`<h3 class="text-xl font-bold mb-5">업로드된 자료</h3>
-        <div class="space-y-3">${state.materials.materials.map(m=>`<div class="rounded-2xl border border-outline p-4"><p class="font-bold">${m.title || m.file_name}</p><p class="text-sm text-subtext">${m.file_name}</p><p class="text-xs text-primary font-bold mt-2">${m.pages || '-'}페이지 · ${m.chunks || '-'}청크</p></div>`).join('')}</div>`)}
-      </div>
-    </div>`;
+function renderUpload(){
+  const materials=state.materials.materials||[];
+  document.getElementById('upload').innerHTML = `<div class="grid grid-cols-12 gap-6">
+    <div class="col-span-7">${card(`<h3 class="text-2xl font-extrabold mb-2">강의자료 업로드</h3><p class="text-subtext mb-6">텍스트 추출 가능한 PDF를 업로드하면 실제로 텍스트 추출, 청킹, 임베딩, ChromaDB 저장을 수행합니다.</p><div class="border-2 border-dashed border-primary/30 bg-softblue rounded-3xl p-10 text-center"><span class="material-symbols-outlined text-primary text-6xl">cloud_upload</span><p class="text-xl font-bold mt-3">PDF 파일 업로드</p><p class="text-subtext mt-2">여러 개의 PDF를 동시에 선택할 수 있습니다.</p><input id="pdf-files" type="file" multiple accept=".pdf" class="mt-5 block w-full text-sm text-subtext bg-white rounded-xl border border-outline p-3"/><button onclick="uploadPDFs()" class="mt-5 bg-primary text-white rounded-xl px-6 py-3 font-bold">PDF 분석 시작</button><div id="upload-result" class="mt-4 text-sm"></div></div>`)}</div>
+    <div class="col-span-5">${card(`<h3 class="text-xl font-bold mb-5">업로드된 자료</h3><div class="space-y-3">${materials.map(m=>`<div class="rounded-2xl border border-outline p-4"><p class="font-bold">${escapeHtml(m.title || m.file_name)}</p><p class="text-sm text-subtext">${escapeHtml(m.file_name || "")}</p><p class="text-xs text-primary font-bold mt-2">${m.pages || '-'}페이지 · ${m.chunks || '-'}청크</p></div>`).join('') || '<p class="text-subtext">아직 업로드된 자료가 없습니다.</p>'}</div>`)}</div>
+  </div>`;
 }
-function renderAnalysis() {
-  const s = state.summary;
+function materialIdOf(m){ return m.material_id || m.id || m.file_name || m.title || ""; }
+function materialLabelOf(m){ return `${m.file_name || m.title || m.material_id || "자료"} (${m.pages || m.page_count || "-"}페이지 · ${m.chunks || m.chunk_count || "-"}청크)`; }
+function renderAnalysis(){
+  const s=state.summary||{summary:"자료를 업로드하면 핵심 요약이 표시됩니다.",keywords:[],concepts:[]};
+  const materials=(state.materials&&state.materials.materials)?state.materials.materials:[];
+  const options=[`<option value="">업로드된 자료 전체</option>`, ...materials.map(m=>{const id=materialIdOf(m); return `<option value="${escapeHtml(id)}" ${state.currentMaterialId===id?"selected":""}>${escapeHtml(materialLabelOf(m))}</option>`;})].join("");
+
   document.getElementById('analysis').innerHTML = `
-    <div class="grid grid-cols-12 gap-6">
-      <div class="col-span-8">${card(`<h3 class="text-2xl font-extrabold mb-4">핵심 요약</h3><p class="leading-8 text-[17px]">${s.summary}</p>
-      <h4 class="font-bold text-lg mt-7 mb-3">중요 키워드</h4>${s.keywords.map(k=>`<span class="inline-flex rounded-full bg-softblue text-primary px-3 py-1.5 text-sm font-bold mr-2 mb-2">#${k}</span>`).join('')}`)}</div>
-      <div class="col-span-4">${card(`<h3 class="text-xl font-bold mb-4">개념 카드</h3>
-      <div class="space-y-3">${s.concepts.map(c=>`<div class="rounded-2xl bg-surface border border-outline p-4"><p class="font-bold">${c.name}</p><p class="text-sm text-subtext mt-1">${c.summary}</p><p class="text-xs text-primary font-bold mt-2">출처 p.${c.source_page}</p></div>`).join('')}</div>`)}</div>
-    </div>`;
-}
-
-function renderTutor() {
-  document.getElementById('tutor').innerHTML = `
-    <div class="grid grid-cols-12 gap-6">
-      <div class="col-span-8">${card(`<h3 class="text-2xl font-extrabold mb-5">AI 튜터에게 질문하기</h3>
-        <div class="rounded-2xl bg-surface p-4 mb-5 flex items-center gap-3">
-          <span class="material-symbols-outlined text-primary">search</span>
-          <input id="tutor-question" class="bg-transparent outline-none flex-1 font-medium" value="고조선부터 후삼국까지 흐름을 간단히 설명해줘.">
-          <button onclick="askTutor()" class="bg-primary text-white rounded-xl px-5 py-2 font-bold">질문하기</button>
-        </div>
-        <div id="tutor-chat" class="space-y-4 text-subtext">질문하기 버튼을 누르면 /api/tutor/ask 응답이 표시됩니다.</div>`)}
-      </div>
-      <div class="col-span-4">${card(`<h3 class="text-xl font-bold mb-4">답변 근거</h3><div id="tutor-sources" class="text-subtext">아직 표시할 출처가 없습니다.</div>`)}</div>
-    </div>`;
-}
-
-async function askTutor() {
-  const q = document.getElementById("tutor-question").value;
-  const res = await apiPost("/api/tutor/ask", {user_id:1, question:q});
-  document.getElementById("tutor-chat").innerHTML = `
-    <div class="flex justify-end"><div class="bg-primary text-white rounded-3xl rounded-tr-md p-4 max-w-xl">${q}</div></div>
-    <div class="flex justify-start"><div class="bg-surface rounded-3xl rounded-tl-md p-5 leading-8">${res.answer}</div></div>`;
-  document.getElementById("tutor-sources").innerHTML = res.sources.map(sourceBox).join("");
-}
-
-function renderQuiz() {
-  document.getElementById('quiz').innerHTML = card(`
-    <div class="flex justify-between items-start mb-6">
-      <div>
-        <h3 class="text-2xl font-extrabold">자료 기반 문제 생성</h3>
-        <p class="text-subtext mt-1">업로드된 PDF에서 RAG 검색을 수행한 뒤 Ollama로 문제를 생성합니다.</p>
-      </div>
+    <div class="mb-5 bg-white rounded-3xl border border-outline shadow-soft p-6">
+      <p class="text-sm text-subtext mb-2">분석할 자료 선택</p>
+      <select id="analysis-material-select" class="w-full rounded-2xl border border-outline px-4 py-3 font-semibold bg-white" onchange="changeAnalysisMaterial(this.value)">
+        ${options}
+      </select>
+      <p class="text-xs text-subtext mt-2">여러 PDF를 업로드한 경우, 선택한 자료만 기준으로 핵심 요약을 다시 생성합니다.</p>
     </div>
 
-    <div class="rounded-3xl bg-surface border border-outline p-5 mb-6">
-      <input id="question-query"
-        class="w-full rounded-xl border border-outline px-4 py-3 mb-3"
-        value="업로드한 자료의 핵심 개념에 대한 문제를 만들어줘" />
-
-      <div class="grid grid-cols-3 gap-3">
-        <select id="question-type" class="rounded-xl border border-outline px-4 py-3">
-          <option>4지선다 객관식</option>
-          <option>OX 문제</option>
-          <option>빈칸 주관식</option>
-        </select>
-
-        <select id="student-level" class="rounded-xl border border-outline px-4 py-3">
-          <option>Level 1 - 초급</option>
-          <option selected>Level 2 - 중급</option>
-          <option>Level 3 - 상급</option>
-          <option>Level 4 - 심화</option>
-        </select>
-
-        <button onclick="generateQuestionFromPDF()"
-          class="bg-primary text-white rounded-xl px-5 py-3 font-bold">
-          문제 생성
-        </button>
+    <div class="grid grid-cols-12 gap-6">
+      <div class="col-span-12">
+        ${card(`
+          <h3 class="text-2xl font-extrabold mb-4">PDF별 학습 요약</h3>
+          <div id="analysis-summary-text">${renderSummaryContent(s)}</div>
+          <h4 class="font-bold text-lg mt-7 mb-3">중요 키워드</h4>
+          <div id="analysis-keywords">${renderKeywordChips(s.keywords)}</div>
+        `)}
       </div>
-
-      <div id="question-generate-result" class="mt-3 text-sm"></div>
-    </div>
-
-    <div id="question-list" class="space-y-4"></div>
-  `);
-
+    </div>`;
+}
+async function changeAnalysisMaterial(materialId){
+  state.currentMaterialId=materialId||null;
+  const el=document.getElementById("analysis-summary-text"); if(el) el.innerHTML="선택한 자료를 분석하고 핵심 요약을 생성하는 중입니다...";
+  const url=materialId?`/api/materials/summary?user_id=1&material_id=${encodeURIComponent(materialId)}`:`/api/materials/summary?user_id=1`;
+  try{ state.summary=await apiGet(url); renderAnalysis(); }catch(e){ state.summary={summary:`자료 분석 실패: ${e}`, keywords:[], concepts:[]}; renderAnalysis(); }
+}
+function renderTutorMessages(){
+  const chat=document.getElementById("tutor-chat"); if(!chat) return;
+  const messages=state.tutorMessages||[];
+  if(!messages.length){ chat.innerHTML=`<div class="text-subtext">질문하기 버튼을 누르면 업로드된 자료 기반 답변이 표시됩니다.</div>`; return; }
+  chat.innerHTML=messages.map(m=> m.role==="user" ? `<div class="flex justify-end"><div class="bg-primary text-white rounded-3xl rounded-tr-md p-4 max-w-xl">${escapeHtml(m.content)}</div></div>` : `<div class="flex justify-start"><div class="bg-surface rounded-3xl rounded-tl-md p-5 leading-8 whitespace-pre-line">${escapeHtml(m.content)}</div></div>`).join("");
+  chat.scrollTop=chat.scrollHeight;
+}
+function renderTutor(){
+  document.getElementById('tutor').innerHTML = `<div class="grid grid-cols-12 gap-6"><div class="col-span-8">${card(`<h3 class="text-2xl font-extrabold mb-5">AI 튜터에게 질문하기</h3><div class="rounded-2xl bg-surface p-4 mb-5 flex items-center gap-3"><span class="material-symbols-outlined text-primary">search</span><input id="tutor-question" class="bg-transparent outline-none flex-1 font-medium" value="${escapeHtml(state.currentTutorInput||"")}" oninput="state.currentTutorInput=this.value" onkeydown="if(event.key==='Enter') askTutor()"><button onclick="askTutor()" class="bg-primary text-white rounded-xl px-5 py-2 font-bold">질문하기</button></div><div id="tutor-chat" class="space-y-4 max-h-[560px] overflow-y-auto pr-2"></div>`)}</div><div class="col-span-4">${card(`<h3 class="text-xl font-bold mb-4">답변 근거</h3><div id="tutor-sources" class="text-subtext">질문 후 근거가 표시됩니다.</div>`)}</div></div>`;
+  renderTutorMessages();
+}
+async function askTutor(){
+  const input=document.getElementById("tutor-question"); const q=input.value.trim(); if(!q) return;
+  state.currentTutorInput=q; const sourceEl=document.getElementById("tutor-sources");
+  state.tutorMessages.push({role:"user",content:q}); state.tutorMessages.push({role:"assistant",content:"답변 생성 중입니다. 업로드된 자료에서 관련 근거를 검색하고 있습니다..."});
+  renderTutorMessages(); if(sourceEl) sourceEl.innerHTML=`<span class="text-subtext">근거 검색 중...</span>`;
+  try{ const res=await apiPost("/api/tutor/ask",{user_id:1, question:q, top_k:6}); state.tutorMessages[state.tutorMessages.length-1]={role:"assistant", content:res.answer||"답변을 생성하지 못했습니다."}; renderTutorMessages(); const sources=res.sources||[]; if(sourceEl) sourceEl.innerHTML=sources.length?sources.map(sourceBox).join(""):`<span class="text-subtext">표시할 출처가 없습니다.</span>`; }
+  catch(e){ state.tutorMessages[state.tutorMessages.length-1]={role:"assistant", content:`AI 튜터 요청 실패: ${e}`}; renderTutorMessages(); if(sourceEl) sourceEl.innerHTML=`<span class="text-red-600">요청 실패</span>`; }
+}
+function renderQuiz(){
+  document.getElementById('quiz').innerHTML=card(`<h3 class="text-2xl font-extrabold">자료 기반 문제 생성</h3><p class="text-subtext mt-1 mb-6">업로드된 PDF에서 RAG 검색을 수행한 뒤 Ollama로 문제를 생성합니다.</p><div class="rounded-3xl bg-surface border border-outline p-5 mb-6"><input id="question-query" class="w-full rounded-xl border border-outline px-4 py-3 mb-3" value="업로드한 자료의 핵심 개념에 대한 문제를 만들어줘"/><div class="grid grid-cols-3 gap-3"><select id="question-type" class="rounded-xl border border-outline px-4 py-3"><option>4지선다 객관식</option><option>OX 문제</option><option>빈칸 주관식</option></select><select id="student-level" class="rounded-xl border border-outline px-4 py-3"><option>Level 1 - 초급</option><option selected>Level 2 - 중급</option><option>Level 3 - 상급</option><option>Level 4 - 심화</option></select><button onclick="generateQuestionFromPDF()" class="bg-primary text-white rounded-xl px-5 py-3 font-bold">문제 생성</button></div><div id="question-generate-result" class="mt-3 text-sm"></div></div><div id="question-list" class="space-y-4"></div>`);
   renderQuestionList();
 }
+async function uploadPDFs(){
+  const input=document.getElementById("pdf-files"); const box=document.getElementById("upload-result");
+  if(!input || !input.files.length){ box.innerHTML=`<span class="text-red-600 font-bold">PDF 파일을 선택하세요.</span>`; return; }
+  const fd=new FormData(); fd.append("user_id",1); for(const file of input.files){ fd.append("files",file); }
+  box.innerHTML=`<span class="text-primary font-bold">PDF 처리 중입니다. 잠시만 기다려주세요...</span>`;
+  try{ const res=await fetch("/api/materials/upload",{method:"POST",body:fd}); const data=await res.json(); box.innerHTML=`<div class="rounded-2xl bg-greenSoft p-4 text-green-700 font-bold">PDF 처리 완료: ${data.saved_chunks}개 chunk 저장</div>`; state.materials={user_id:data.user_id,materials:data.materials,material_set_name:"업로드 자료 세트"}; state.currentMaterialId=null; state.summary=await apiGet("/api/materials/summary?user_id=1"); state.questions={user_id:1,questions:[]}; state.wrong={wrong_notes:[]}; state.weak={weak_concepts:[]}; state.plan={study_plan:[]}; state.dashboard=await apiGet("/api/dashboard/summary?user_id=1"); renderAll(); show("analysis"); }catch(e){ box.innerHTML=`<span class="text-red-600 font-bold">PDF 처리 실패: ${e}</span>`; }
+}
+function renderQuestionList(){
+  const box=document.getElementById("question-list"); if(!box||!state.questions) return; const list=state.questions.questions||[];
+  if(!list.length){ box.innerHTML=`<div class="rounded-3xl border border-outline p-5 text-subtext">아직 생성된 문제가 없습니다. 위 입력창에서 문제를 생성해보세요.</div>`; return; }
+  box.innerHTML=list.map(q=>`<div class="rounded-3xl border border-outline p-5"><div class="flex items-center justify-between mb-3"><span class="rounded-full bg-softblue text-primary px-3 py-1 text-xs font-bold">${escapeHtml(q.type)}</span><span class="text-sm text-subtext">${escapeHtml(q.concept||"")}</span></div><p class="font-bold text-lg mb-3">${escapeHtml(q.question)}</p>${q.choices?.length?`<div class="grid grid-cols-2 gap-2 mb-3">${q.choices.map(c=>`<div class="rounded-xl bg-surface p-3 text-sm">${escapeHtml(c)}</div>`).join('')}</div>`:''}<p class="text-subtext text-sm">정답과 해설은 문제 풀이 후 표시됩니다.</p><button onclick="show('solve')" class="mt-3 bg-primary text-white rounded-xl px-4 py-2 text-sm font-bold">문제 풀이로 이동</button></div>`).join('');
+}
+async function generateQuestionFromPDF(){
+  const resultBox=document.getElementById("question-generate-result"); resultBox.innerHTML=`<span class="text-primary font-bold">문제 생성 중입니다...</span>`;
+  try{ const result=await apiPost("/api/review/questions",{user_id:1, query:document.getElementById("question-query").value, student_level:document.getElementById("student-level").value, question_type:document.getElementById("question-type").value, question_direction:"자동(긍정형 우선)", weak_concept:"", top_k:2}); state.questions=result; resultBox.innerHTML=`<span class="text-primary font-bold">문제 생성 완료</span>`; renderQuestionList(); renderSolve(); }catch(e){ resultBox.innerHTML=`<span class="text-red-600 font-bold">문제 생성 실패: ${e}</span>`; }
+}
+function renderSolve(){
+  const qs=(state.questions.questions||[]).slice(0,5);
 
-async function uploadPDFs() {
-  const input = document.getElementById("pdf-files");
-  const resultBox = document.getElementById("upload-result");
+  function answerUi(q){
+    if(q.type==="fill_blank"){
+      return `<input id="answer-input-${q.question_id}" class="w-full rounded-xl border border-outline px-4 py-3" placeholder="답을 입력하세요." />
+              <button onclick="submitTextAnswer(${q.question_id})" class="mt-3 bg-primary text-white rounded-xl px-5 py-3 font-bold">채점하기</button>`;
+    }
 
-  if (!input || !input.files.length) {
-    resultBox.innerHTML = `<span class="text-red-600 font-bold">PDF 파일을 선택하세요.</span>`;
-    return;
+    const choices = q.type==="ox" && (!q.choices || !q.choices.length) ? ["O","X"] : (q.choices || []);
+    return `<div class="grid grid-cols-2 gap-3">${choices.map(c=>`<button onclick="submitAnswer(${q.question_id}, '${encodeURIComponent(c)}', this)" class="answer-btn text-left rounded-2xl bg-surface hover:bg-softblue border border-outline p-4">${escapeHtml(c)}</button>`).join("")}</div>`;
   }
 
-  const formData = new FormData();
-  formData.append("user_id", 1);
+  document.getElementById('solve').innerHTML=card(`
+    <h3 class="text-2xl font-extrabold mb-2">문제 풀이</h3>
+    <p class="text-subtext mb-6">답안을 선택하거나 입력하면 채점 후 정답, 해설, 정답 근거, 보기별 해설이 표시됩니다.</p>
+    <div class="space-y-6">
+      ${qs.map(q=>`
+        <div class="rounded-3xl border border-outline p-5">
+          <div class="flex items-center justify-between mb-2">
+            <span class="rounded-full bg-softblue text-primary px-3 py-1 text-xs font-bold">${escapeHtml(q.type || "")}</span>
+            <span class="text-sm text-subtext">${escapeHtml(q.concept || "")}</span>
+          </div>
+          <p class="font-bold text-lg mb-4">문제 ${q.question_id}. ${escapeHtml(q.question)}</p>
+          ${q.raw_quiz && q.raw_quiz.hint ? `<details class="mb-4"><summary class="cursor-pointer text-primary font-bold">힌트 보기</summary><div class="rounded-xl bg-softblue text-primary p-4 mt-2">${escapeHtml(q.raw_quiz.hint)}</div></details>` : ""}
+          ${answerUi(q)}
+          <div class="result mt-5 text-sm"></div>
+        </div>`).join("") || '<p class="text-subtext">풀 문제가 없습니다. 먼저 문제를 생성하세요.</p>'}
+    </div>`);
+}
+async function submitAnswer(questionId, encodedChoice, btn){
+  const selected=decodeURIComponent(encodedChoice);
+  const res=await apiPost("/api/answers/submit",{user_id:1,question_id:questionId,selected_answer:selected,elapsed_time:30});
+  const wrap=btn.closest('.rounded-3xl');
+  const result=wrap.querySelector('.result');
 
-  for (const file of input.files) {
-    formData.append("files", file);
-  }
+  wrap.querySelectorAll('.answer-btn').forEach(b=>b.classList.remove('bg-greenSoft','bg-redSoft','border-green-400','border-red-400'));
 
-  resultBox.innerHTML = `<span class="text-primary font-bold">PDF 처리 중입니다. 잠시만 기다려주세요...</span>`;
+  if(res.is_correct){ btn.classList.add('bg-greenSoft','border-green-400'); }
+  else { btn.classList.add('bg-redSoft','border-red-400'); }
 
-  try {
-    const res = await fetch("/api/materials/upload", {
-      method: "POST",
-      body: formData
-    });
+  result.innerHTML = renderDetailedFeedback(res);
 
-    const data = await res.json();
-
-    resultBox.innerHTML = `
-      <div class="rounded-2xl bg-greenSoft p-4 text-green-700 font-bold">
-        PDF 처리 완료: ${data.saved_chunks}개 chunk 저장
-      </div>
-    `;
-
-    state.materials = {
-      user_id: data.user_id,
-      materials: data.materials,
-      material_set_name: "업로드 자료 세트"
-    };
-
-    state.summary = await apiGet("/api/materials/summary?user_id=1");
-    state.questions = {user_id: 1, questions: []};
-    state.dashboard = await apiGet("/api/dashboard/summary?user_id=1");
-
-    renderAll();
-    show("analysis");
-  } catch (e) {
-    resultBox.innerHTML = `<span class="text-red-600 font-bold">PDF 처리 실패: ${e}</span>`;
-  }
+  state.wrong=await apiGet("/api/wrong-notes?user_id=1");
+  state.weak=await apiGet("/api/weak-concepts?user_id=1");
+  state.plan=await apiGet("/api/study-plan?user_id=1");
+  state.dashboard=await apiGet("/api/dashboard/summary?user_id=1");
+  renderWrong(); renderAdvisor(); renderDashboard();
 }
 
-function renderQuestionList() {
-  const box = document.getElementById("question-list");
-  if (!box || !state.questions) return;
+async function submitTextAnswer(questionId){
+  const input=document.getElementById(`answer-input-${questionId}`);
+  const selected=(input && input.value || "").trim();
+  if(!selected){ alert("답을 입력하세요."); return; }
 
-  const list = state.questions.questions || [];
+  const res=await apiPost("/api/answers/submit",{user_id:1,question_id:questionId,selected_answer:selected,elapsed_time:30});
+  const wrap=input.closest('.rounded-3xl');
+  const result=wrap.querySelector('.result');
+  result.innerHTML = renderDetailedFeedback(res);
 
-  if (!list.length) {
-    box.innerHTML = `<div class="rounded-3xl border border-outline p-5 text-subtext">아직 생성된 문제가 없습니다. 위 입력창에서 문제를 생성해보세요.</div>`;
-    return;
-  }
-
-  box.innerHTML = list.map(q => `
-    <div class="rounded-3xl border border-outline p-5">
-      <div class="flex items-center justify-between mb-3">
-        <span class="rounded-full bg-softblue text-primary px-3 py-1 text-xs font-bold">${q.type}</span>
-        <span class="text-sm text-subtext">${q.concept || ""}</span>
-      </div>
-
-      <p class="font-bold text-lg mb-3">${q.question}</p>
-
-      ${q.choices?.length ? `
-        <div class="grid grid-cols-2 gap-2 mb-3">
-          ${q.choices.map(c => `<div class="rounded-xl bg-surface p-3 text-sm">${c}</div>`).join('')}
-        </div>
-      ` : ''}
-
-      <p class="text-green-700 font-bold">정답: ${q.answer}</p>
-      <p class="text-sm text-subtext mt-2">${q.explanation || ""}</p>
-      ${sourceBox(q.source || {})}
-    </div>
-  `).join('');
+  state.wrong=await apiGet("/api/wrong-notes?user_id=1");
+  state.weak=await apiGet("/api/weak-concepts?user_id=1");
+  state.plan=await apiGet("/api/study-plan?user_id=1");
+  state.dashboard=await apiGet("/api/dashboard/summary?user_id=1");
+  renderWrong(); renderAdvisor(); renderDashboard();
 }
-
-async function generateQuestionFromPDF() {
-  const query = document.getElementById("question-query").value;
-  const questionType = document.getElementById("question-type").value;
-  const studentLevel = document.getElementById("student-level").value;
-  const resultBox = document.getElementById("question-generate-result");
-
-  resultBox.innerHTML = `<span class="text-primary font-bold">문제 생성 중입니다. Ollama 응답에 시간이 걸릴 수 있습니다...</span>`;
-
-  try {
-    const result = await apiPost("/api/review/questions", {
-      user_id: 1,
-      query: query,
-      student_level: studentLevel,
-      question_type: questionType,
-      question_direction: "자동(긍정형 우선)",
-      weak_concept: "",
-      top_k: 2
-    });
-
-    state.questions = result;
-    resultBox.innerHTML = `<span class="text-primary font-bold">문제 생성 완료</span>`;
-    renderQuestionList();
-    renderSolve();
-  } catch (e) {
-    resultBox.innerHTML = `<span class="text-red-600 font-bold">문제 생성 실패: ${e}</span>`;
-  }
+function renderWrong(){
+  const notes=(state.wrong&&state.wrong.wrong_notes)||[];
+  document.getElementById('wrong').innerHTML=card(`<h3 class="text-2xl font-extrabold mb-5">오답노트</h3><div class="space-y-4">${notes.map(n=>`<div class="rounded-3xl border border-outline p-5"><div class="flex justify-between mb-2"><span class="font-bold text-primary">${escapeHtml(n.concept)}</span><span class="text-sm text-subtext">문제 ${n.question_id}</span></div><p class="font-bold mb-3">${escapeHtml(n.question)}</p><p class="text-red-700 bg-redSoft rounded-xl p-3 mb-2">내 답: ${escapeHtml(n.selected_answer)}</p><p class="text-green-700 bg-greenSoft rounded-xl p-3 mb-3">정답: ${escapeHtml(n.correct_answer)}</p><p class="text-subtext">${escapeHtml(n.explanation)}</p><p class="text-xs text-primary font-bold mt-3">출처 p.${n.source_page}</p></div>`).join('') || '<p class="text-subtext">아직 틀린 문제가 없습니다. 문제를 풀면 오답노트가 자동으로 생성됩니다.</p>'}</div>`);
 }
-function renderSolve() {
-  const qs = (state.questions.questions || []).filter(q=>q.type==='multiple_choice').slice(0,5);
-  document.getElementById('solve').innerHTML = card(`<h3 class="text-2xl font-extrabold mb-2">문제 풀이</h3><p class="text-subtext mb-6">답안을 선택하면 /api/answers/submit으로 제출합니다.</p>
-    <div class="space-y-6">${qs.map(q=>`<div class="rounded-3xl border border-outline p-5"><p class="font-bold text-lg mb-4">문제 ${q.question_id}. ${q.question}</p><div class="grid grid-cols-2 gap-3">${q.choices.map(c=>`<button onclick="submitAnswer(${q.question_id}, '${encodeURIComponent(c)}', this)" class="answer-btn text-left rounded-2xl bg-surface hover:bg-softblue border border-outline p-4">${c}</button>`).join('')}</div><div class="result mt-3 text-sm font-bold"></div></div>`).join('')}</div>`);
+function renderAdvisor(){
+  const weak=(state.weak&&state.weak.weak_concepts)||[]; const plan=(state.plan&&state.plan.study_plan)||[];
+  document.getElementById('advisor').innerHTML=`<div class="grid grid-cols-12 gap-6"><div class="col-span-5">${card(`<h3 class="text-2xl font-extrabold mb-5">약점 개념</h3><div class="space-y-4">${weak.map(w=>`<div><div class="flex justify-between mb-1"><span class="font-bold">${escapeHtml(w.concept)}</span><span class="text-sm text-subtext">${w.accuracy}%</span></div><div class="h-2 bg-surface rounded-full overflow-hidden"><div class="h-full bg-primary rounded-full" style="width:${w.accuracy}%"></div></div><p class="text-sm text-subtext mt-2">${escapeHtml(w.reason)}</p></div>`).join('') || '<p class="text-subtext">아직 학습 기록이 부족합니다.</p>'}</div>`)}</div><div class="col-span-7">${card(`<h3 class="text-2xl font-extrabold mb-5">오늘의 학습계획</h3><div class="space-y-4">${plan.map(p=>`<div class="rounded-3xl bg-surface border border-outline p-5 flex gap-4"><div class="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center font-bold">${p.step}</div><div><p class="font-bold text-lg">${escapeHtml(p.title)}</p><p class="text-sm text-primary font-bold mt-1">${escapeHtml(p.time)}</p><p class="text-subtext mt-2">${escapeHtml(p.reason)}</p></div></div>`).join('') || '<p class="text-subtext">문제를 풀면 맞춤 학습계획이 생성됩니다.</p>'}</div>`)}</div></div>`;
 }
-async function submitAnswer(questionId, encodedChoice, btn) {
-  const selected = decodeURIComponent(encodedChoice);
-  const res = await apiPost("/api/answers/submit", {user_id:1, question_id:questionId, selected_answer:selected, elapsed_time:30});
-  const card = btn.closest('.rounded-3xl');
-  const result = card.querySelector('.result');
-  card.querySelectorAll('.answer-btn').forEach(b=>b.classList.remove('bg-greenSoft','bg-redSoft','border-green-400','border-red-400'));
-  if (res.is_correct) { btn.classList.add('bg-greenSoft','border-green-400'); result.className='result mt-3 text-sm font-bold text-green-700'; result.innerHTML='정답입니다.'; }
-  else { btn.classList.add('bg-redSoft','border-red-400'); result.className='result mt-3 text-sm font-bold text-red-700'; result.innerHTML=`오답입니다. 정답: ${res.correct_answer}<br><span class="text-subtext">${res.explanation}</span>`; }
-}
-
-function renderWrong() {
-  document.getElementById('wrong').innerHTML = card(`<h3 class="text-2xl font-extrabold mb-5">오답노트</h3><div class="space-y-4">${state.wrong.wrong_notes.map(n=>`<div class="rounded-3xl border border-outline p-5"><div class="flex justify-between mb-2"><span class="font-bold text-primary">${n.concept}</span><span class="text-sm text-subtext">문제 ${n.question_id}</span></div><p class="font-bold mb-3">${n.question}</p><p class="text-red-700 bg-redSoft rounded-xl p-3 mb-2">내 답: ${n.selected_answer}</p><p class="text-green-700 bg-greenSoft rounded-xl p-3 mb-3">정답: ${n.correct_answer}</p><p class="text-subtext">${n.explanation}</p><p class="text-xs text-primary font-bold mt-3">출처 p.${n.source_page}</p></div>`).join('')}</div>`);
-}
-
-function renderAdvisor() {
-  document.getElementById('advisor').innerHTML = `<div class="grid grid-cols-12 gap-6"><div class="col-span-5">${card(`<h3 class="text-2xl font-extrabold mb-5">약점 개념</h3><div class="space-y-4">${state.weak.weak_concepts.map(w=>`<div><div class="flex justify-between mb-1"><span class="font-bold">${w.concept}</span><span class="text-sm text-subtext">${w.accuracy}%</span></div><div class="h-2 bg-surface rounded-full overflow-hidden"><div class="h-full bg-primary rounded-full" style="width:${w.accuracy}%"></div></div><p class="text-sm text-subtext mt-2">${w.reason}</p></div>`).join('')}</div>`)}</div><div class="col-span-7">${card(`<h3 class="text-2xl font-extrabold mb-5">오늘의 학습계획</h3><div class="space-y-4">${state.plan.study_plan.map(p=>`<div class="rounded-3xl bg-surface border border-outline p-5 flex gap-4"><div class="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center font-bold">${p.step}</div><div><p class="font-bold text-lg">${p.title}</p><p class="text-sm text-primary font-bold mt-1">${p.time}</p><p class="text-subtext mt-2">${p.reason}</p></div></div>`).join('')}</div>`)}</div></div>`;
-}
-
-function renderDashboard() {
-  const d = state.dashboard;
-  document.getElementById('dashboard').innerHTML = `<div class="grid grid-cols-4 gap-5 mb-6"><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">총 풀이 수</p><p class="text-3xl font-extrabold mt-2">${d.total_solved}</p></div><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">정답 수</p><p class="text-3xl font-extrabold mt-2">${d.correct_count}</p></div><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">오답 수</p><p class="text-3xl font-extrabold mt-2">${d.wrong_count}</p></div><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">정답률</p><p class="text-3xl font-extrabold mt-2">${d.accuracy}%</p></div></div>${card(`<h3 class="text-2xl font-extrabold mb-4">다음 추천 학습</h3><div class="rounded-3xl bg-softblue p-6"><span class="material-symbols-outlined text-primary text-4xl">tips_and_updates</span><p class="font-bold text-xl mt-3">${d.recommended_next}</p></div>`)}`;
-}
-
-function show(screen) {
-  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
-  document.getElementById(screen).classList.add('active');
-  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('nav-active'));
-  document.querySelector(`[data-screen="${screen}"]`).classList.add('nav-active');
-  document.getElementById('breadcrumb').textContent = titles[screen];
-  document.getElementById('page-title').textContent = titles[screen];
-}
+function renderDashboard(){ const d=state.dashboard; document.getElementById('dashboard').innerHTML=`<div class="grid grid-cols-4 gap-5 mb-6"><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">총 풀이 수</p><p class="text-3xl font-extrabold mt-2">${d.total_solved}</p></div><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">정답 수</p><p class="text-3xl font-extrabold mt-2">${d.correct_count}</p></div><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">오답 수</p><p class="text-3xl font-extrabold mt-2">${d.wrong_count}</p></div><div class="bg-white rounded-3xl p-6 border border-outline shadow-soft"><p class="text-subtext text-sm">정답률</p><p class="text-3xl font-extrabold mt-2">${d.accuracy}%</p></div></div>${card(`<h3 class="text-2xl font-extrabold mb-4">다음 추천 학습</h3><div class="rounded-3xl bg-softblue p-6"><span class="material-symbols-outlined text-primary text-4xl">tips_and_updates</span><p class="font-bold text-xl mt-3">${escapeHtml(d.recommended_next || "문제를 풀면 추천이 표시됩니다.")}</p></div>`)}`; }
+function show(screen){ document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active')); document.getElementById(screen).classList.add('active'); document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('nav-active')); document.querySelector(`[data-screen="${screen}"]`).classList.add('nav-active'); document.getElementById('breadcrumb').textContent=titles[screen]; document.getElementById('page-title').textContent=titles[screen]; }
 document.querySelectorAll('.nav-btn').forEach(btn=>btn.addEventListener('click',()=>show(btn.dataset.screen)));
-
-loadAll().catch(err => {
-  document.getElementById("home").innerHTML = card(`<h3 class="text-2xl font-bold text-red-600">Backend 연결 실패</h3><p class="mt-3">터미널에서 <code>uvicorn app:app --reload</code>를 실행한 뒤 <code>http://127.0.0.1:8000</code>으로 접속하세요.</p>`);
-});
+loadAll().catch(err=>{ document.getElementById("home").innerHTML=card(`<h3 class="text-2xl font-bold text-red-600">Backend 연결 실패</h3><p class="mt-3">터미널에서 <code>uvicorn app:app --host 0.0.0.0 --port 8000</code>를 실행하세요.</p><p class="text-subtext mt-2">${escapeHtml(err)}</p>`); });
 </script>
 </body>
 </html>

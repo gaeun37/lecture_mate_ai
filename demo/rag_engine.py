@@ -1,9 +1,7 @@
-# rag_engine.py
-# Streamlit 화면 코드를 제거하고 FastAPI에서 재사용할 핵심 함수만 분리한 파일입니다.
-
 
 import json
 import re
+from datetime import datetime
 from functools import lru_cache
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -18,7 +16,6 @@ from json_repair import repair_json
 # =========================
 # 기본 설정
 # =========================
-
 
 
 # =========================
@@ -38,12 +35,14 @@ def get_chroma_client():
 # =========================
 # 2. PDF 처리
 # =========================
+
 def make_safe_id(text: str) -> str:
     """
     파일명/자료명을 ChromaDB id에 안전하게 넣기 위한 보조 함수.
     """
     safe = re.sub(r"[^0-9A-Za-z가-힣_-]+", "_", str(text)).strip("_")
     return safe[:80] if safe else "material"
+
 
 def extract_text_from_pdf(
     file_bytes: bytes,
@@ -135,6 +134,23 @@ def normalize_for_match(text: Any) -> str:
     text = text.replace("·", "․")
     text = re.sub(r"\s+", "", text)
     return text
+
+
+def normalize_blank_marker(question: Any) -> str:
+    """
+    빈칸 주관식에서 모델이 ___, ____, _____처럼 서로 다른 길이의 밑줄을 출력해도
+    화면과 검증에서는 표준 빈칸 표시인 _____로 통일한다.
+    """
+    question = str(question).strip()
+    question = re.sub(r"_{3,}", "_____", question)
+    return question
+
+
+def has_blank_marker(question: Any) -> bool:
+    """
+    빈칸 표시가 3개 이상의 밑줄로 들어오면 빈칸 문제로 인정한다.
+    """
+    return re.search(r"_{3,}", str(question)) is not None
 
 
 def tokenize_query(text: str) -> List[str]:
@@ -435,7 +451,6 @@ def build_quiz_prompt(
 
     context_blocks = []
 
-    # 핵심: 너무 길게 넣지 않는다. 과한 프롬프트가 timeout과 환각을 만든다.
     per_chunk_limit = 750 if question_intent in ["comparison", "role_lookup", "general"] else 600
 
     for idx, chunk in enumerate(retrieved_chunks, start=1):
@@ -478,10 +493,120 @@ def build_quiz_prompt(
 """
     }.get(question_intent, "")
 
+    is_ox = "OX" in question_type or "O/X" in question_type or "ox" in question_type.lower()
+    is_fill_blank = (not is_ox) and ("빈칸" in question_type or "주관식" in question_type)
+
+    if is_ox:
+        type_rule = """
+[문제 유형별 규칙]
+- OX 문제를 만든다.
+- question은 반드시 "다음 설명이 옳으면 O, 틀리면 X를 고르시오:" 형식으로 작성한다.
+- choices는 반드시 ["O", "X"]로 작성한다.
+- answer는 반드시 "O" 또는 "X" 중 하나로만 작성한다.
+- 자동 또는 긍정형 문제에서는 교안 내용과 일치하는 설명을 만들고 answer를 "O"로 작성한다.
+- 부정형 문제에서는 교안 내용과 명확히 어긋나는 설명을 만들고 answer를 "X"로 작성한다.
+- 설명문은 교안 근거에 나온 핵심 사실을 바탕으로 만든다.
+- 교안 근거에 없는 내용을 섞어서 판단하기 어려운 문장을 만들지 마라.
+- choice_explanations는 반드시 빈 리스트 []로 둔다.
+"""
+
+        output_format = f"""
+[출력 형식]
+{{
+  "question_type": "ox",
+  "question_polarity": "positive",
+  "question": "다음 설명이 옳으면 O, 틀리면 X를 고르시오: 교안 근거 기반 설명문",
+  "choices": ["O", "X"],
+  "answer": "O",
+  "part_summary": "출제 파트 요약",
+  "evidence_text": "정답 근거",
+  "explanation": "O 또는 X가 정답인 이유",
+  "choice_explanations": [],
+  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
+  "concept": "핵심 개념",
+  "difficulty": {level_num},
+  "hint": "정답을 직접 말하지 않는 짧은 힌트 한 문장",
+  "grading_criteria": []
+}}
+"""
+
+    elif is_fill_blank:
+        type_rule = """
+[문제 유형별 규칙]
+- 빈칸 주관식 문제를 만든다.
+- question에는 반드시 빈칸 표시 "_____"를 정확히 한 번 포함한다.
+- answer에는 빈칸에 들어갈 정답 단어 또는 짧은 구절만 작성한다.
+- answer는 30자 이내로 작성한다.
+- choices는 반드시 빈 리스트 []로 둔다.
+- choice_explanations도 반드시 빈 리스트 []로 둔다.
+- grading_criteria에는 채점 기준 3개를 작성한다.
+- 빈칸에는 교안 근거에 실제로 등장하거나, 교안 근거에서 직접 확인 가능한 핵심 용어가 들어가야 한다.
+- 정답을 문장 전체로 쓰지 말고, 빈칸에 들어갈 단어 또는 짧은 구절만 작성한다.
+"""
+
+        output_format = f"""
+[출력 형식]
+{{
+  "question_type": "fill_blank",
+  "question_polarity": "positive",
+  "question": "빈칸 _____ 이 포함된 질문 한 문장",
+  "choices": [],
+  "answer": "빈칸에 들어갈 정답 단어 또는 짧은 구절",
+  "part_summary": "출제 파트 요약",
+  "evidence_text": "정답 근거",
+  "explanation": "정답이 빈칸에 들어가야 하는 이유",
+  "choice_explanations": [],
+  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
+  "concept": "핵심 개념",
+  "difficulty": {level_num},
+  "hint": "정답을 직접 말하지 않는 짧은 힌트 한 문장",
+  "grading_criteria": [
+    "빈칸에 핵심 용어를 정확히 작성했는가",
+    "교안 근거의 의미와 맞는 답을 작성했는가",
+    "유사 표현을 쓰더라도 핵심 개념이 유지되는가"
+  ]
+}}
+"""
+
+    else:
+        type_rule = """
+[문제 유형별 규칙]
+- 4지선다 객관식 문제를 만든다.
+- choices에는 보기 4개를 반드시 작성한다.
+- 보기 4개는 서로 다른 내용이어야 한다.
+- answer는 choices 중 하나와 글자까지 완전히 같아야 한다.
+- choice_explanations에는 보기 4개 각각의 해설을 작성한다.
+"""
+
+        output_format = f"""
+[출력 형식]
+{{
+  "question_type": "multiple_choice",
+  "question_polarity": "positive",
+  "question": "질문 한 문장",
+  "choices": ["보기1", "보기2", "보기3", "보기4"],
+  "answer": "choices 중 정답 문장 하나",
+  "part_summary": "출제 파트 요약",
+  "evidence_text": "정답 근거",
+  "explanation": "정답인 이유",
+  "choice_explanations": [
+    {{"choice": "보기1", "is_answer": true, "is_factually_correct": true, "explanation": "해설"}},
+    {{"choice": "보기2", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
+    {{"choice": "보기3", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
+    {{"choice": "보기4", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}}
+  ],
+  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
+  "concept": "핵심 개념",
+  "difficulty": {level_num},
+  "hint": "짧은 힌트 한 문장",
+  "grading_criteria": []
+}}
+"""
+
     return f"""
 너는 대학 강의자료 기반 학습 문제를 만드는 AI 튜터이다.
 
-반드시 [교안 근거]에 있는 내용만 사용해서 4지선다 객관식 문제 1개를 만들어라.
+반드시 [교안 근거]에 있는 내용만 사용해서 학습 문제 1개를 만들어라.
 교안 근거에 없는 개념, 정의, 수식, 수치, 용어, 사례, 역할, 효과를 상상해서 추가하지 마라.
 전문용어, 고유명사, 수식, 숫자, 날짜는 교안 근거에 나온 표현을 최대한 그대로 사용하라.
 
@@ -517,40 +642,24 @@ def build_quiz_prompt(
 
 [공통 생성 규칙]
 - 문제 문장은 반드시 질문형으로 작성한다.
-- 보기 4개는 서로 다른 내용이어야 한다.
-- 정답은 보기 4개 중 하나와 글자까지 완전히 같아야 한다.
-- 정답 보기는 하나의 핵심 사실만 담는다.
-- 한 보기 안에 서로 다른 개념, 조건, 역할, 수식, 단계, 사건을 무리하게 합치지 마라.
+- 교안 근거에 없는 내용을 만들지 마라.
 - part_summary는 1~2문장으로 작성한다.
 - evidence_text는 정답 판단에 필요한 직접 근거만 1~2문장으로 작성한다.
 - explanation은 1~2문장으로 작성한다.
-- choice_explanations에는 보기 4개 각각의 해설을 1문장씩 작성한다.
 - source_pages에는 [사용 가능한 근거 페이지] 안에 있는 숫자만 넣는다.
 - difficulty는 반드시 {level_num}으로 작성한다.
 - 출력은 반드시 JSON 객체 하나만 반환한다.
+- JSON 앞뒤에 설명 문장이나 마크다운 코드블록을 붙이지 마라.
+- 빈칸 주관식이면 question에 반드시 "_____"를 정확히 한 번 포함한다.
+- 빈칸 주관식이면 answer는 빈칸에 들어갈 단어 또는 짧은 구절만 작성한다.
+- 빈칸 주관식이면 choices는 []로 둔다.
+- OX 문제이면 choices는 ["O", "X"]로 둔다.
+- OX 문제이면 answer는 반드시 "O" 또는 "X"로 작성한다.
 
-[출력 형식]
-{{
-  "question_polarity": "positive",
-  "question": "질문 한 문장",
-  "choices": ["보기1", "보기2", "보기3", "보기4"],
-  "answer": "choices 중 정답 문장 하나",
-  "part_summary": "출제 파트 요약",
-  "evidence_text": "정답 근거",
-  "explanation": "정답인 이유",
-  "choice_explanations": [
-    {{"choice": "보기1", "is_answer": true, "is_factually_correct": true, "explanation": "해설"}},
-    {{"choice": "보기2", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
-    {{"choice": "보기3", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}},
-    {{"choice": "보기4", "is_answer": false, "is_factually_correct": false, "explanation": "해설"}}
-  ],
-  "source_pages": [{allowed_pages[0] if allowed_pages else 1}],
-  "concept": "핵심 개념",
-  "difficulty": {level_num},
-  "hint": "짧은 힌트 한 문장"
-}}
+{type_rule}
+
+{output_format}
 """.strip()
-
 
 # =========================
 # 6. Ollama 호출
@@ -687,6 +796,580 @@ def parse_ollama_json(raw_text: str) -> Dict[str, Any]:
 
 
 # =========================
+# 6-1. 파일 전체 핵심 요약
+# =========================
+
+def build_summary_context_from_chunks(
+    chunks: List[Dict[str, Any]],
+    max_chars: int = 12000
+) -> str:
+    """
+    전체 PDF를 한 번에 LLM에 넣으면 너무 길어지므로,
+    목차/표지성 청크를 제외하고 페이지 순서대로 핵심 청크를 모아
+    요약용 context를 만든다.
+    """
+    good_chunks = []
+
+    for chunk in chunks:
+        text = str(chunk.get("text", "")).strip()
+
+        if not text:
+            continue
+
+        if is_table_of_contents_like(text):
+            continue
+
+        if int(chunk.get("quality_score", 0)) < 25:
+            continue
+
+        good_chunks.append(chunk)
+
+    good_chunks = sorted(
+        good_chunks,
+        key=lambda x: (
+            int(x.get("page", 0)),
+            str(x.get("chunk_id", ""))
+        )
+    )
+
+    context_parts = []
+    current_len = 0
+
+    for chunk in good_chunks:
+        page = chunk.get("page", "")
+        file_name = chunk.get("file_name", "")
+        text = str(chunk.get("text", "")).strip()[:900]
+        block = f"[파일 {file_name} / 페이지 {page}]\n{text}\n"
+
+        if current_len + len(block) > max_chars:
+            break
+
+        context_parts.append(block)
+        current_len += len(block)
+
+    return "\n".join(context_parts)
+
+
+
+
+def clean_summary_output(text: str) -> str:
+    """
+    Qwen 계열 모델이 영어 thinking/reasoning을 출력하는 경우,
+    최종 한국어 요약 부분만 남기기 위한 후처리 함수.
+    """
+    if not text:
+        return ""
+
+    text = text.replace("```markdown", "").replace("```", "").strip()
+
+    possible_starts = [
+        "## 1. 한 줄 요약",
+        "## 한 줄 요약",
+        "# 한 줄 요약",
+        "1. 한 줄 요약",
+        "한 줄 요약",
+        "## 2. 전체 핵심 요약",
+        "전체 핵심 요약",
+    ]
+
+    for marker in possible_starts:
+        idx = text.find(marker)
+        if idx != -1:
+            return text[idx:].strip()
+
+    # 모델의 영어 사고 과정으로 보이는 줄 제거
+    lines = text.splitlines()
+    cleaned_lines = []
+    skip_prefixes = (
+        "Okay", "First,", "Wait", "The key", "The user",
+        "I need", "Let's", "Now,", "The document",
+        "The text", "This seems", "It seems", "Hmm",
+    )
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not stripped:
+            if cleaned_lines:
+                cleaned_lines.append(line)
+            continue
+
+        if stripped.startswith(skip_prefixes):
+            continue
+
+        # 영어 알파벳 비율이 매우 높고 한글이 거의 없으면 추론 문장으로 보고 제거
+        korean_count = len(re.findall(r"[가-힣]", stripped))
+        alpha_count = len(re.findall(r"[A-Za-z]", stripped))
+
+        if korean_count == 0 and alpha_count >= 20:
+            continue
+
+        cleaned_lines.append(line)
+
+    cleaned = "\n".join(cleaned_lines).strip()
+    return cleaned if cleaned else text.strip()
+
+
+def summary_json_to_markdown(summary_json: Dict[str, Any]) -> str:
+    one_line = str(summary_json.get("one_line_summary", "")).strip()
+    full_summary = summary_json.get("full_summary", [])
+    key_concepts = summary_json.get("key_concepts", [])
+    exam_points = summary_json.get("exam_points", [])
+
+    if not isinstance(full_summary, list):
+        full_summary = [str(full_summary)]
+
+    if not isinstance(key_concepts, list):
+        key_concepts = [str(key_concepts)]
+
+    if not isinstance(exam_points, list):
+        exam_points = [str(exam_points)]
+
+    md = ""
+
+    md += "## 1. 한 줄 요약\n"
+    md += f"- {one_line}\n\n"
+
+    md += "## 2. 전체 핵심 요약\n"
+    for item in full_summary:
+        item = str(item).strip()
+        if item:
+            md += f"- {item}\n"
+
+    md += "\n## 3. 핵심 개념\n"
+    for item in key_concepts:
+        item = str(item).strip()
+        if item:
+            md += f"- {item}\n"
+
+    md += "\n## 4. 시험 대비 포인트\n"
+    for item in exam_points:
+        item = str(item).strip()
+        if item:
+            md += f"- {item}\n"
+
+    return md.strip()
+
+def generate_document_summary_with_ollama(
+    ollama_url: str,
+    model_name: str,
+    chunks: List[Dict[str, Any]],
+    num_predict: int,
+    stream_read_timeout: int
+) -> str:
+    """
+    업로드된 PDF 전체 내용을 핵심 요약한다.
+    Ollama에게 JSON으로 요약을 받은 뒤, 코드에서 Markdown으로 변환한다.
+    """
+    context = build_summary_context_from_chunks(chunks)
+
+    if not context.strip():
+        return "요약할 수 있는 본문 텍스트가 충분하지 않습니다."
+
+    prompt = f"""
+너는 대학 강의자료를 요약하는 AI 학습 도우미이다.
+
+반드시 한국어로만 답하라.
+영어를 절대 사용하지 마라.
+생각 과정, 분석 과정, 추론 과정을 출력하지 마라.
+"Okay", "First", "Wait", "The user", "start with" 같은 문장을 절대 출력하지 마라.
+아래 [PDF 본문]에 있는 내용만 사용하라.
+본문에 없는 사건, 인물, 연도, 용어를 추가하지 마라.
+
+중요:
+- 출력 형식 설명을 그대로 복사하지 마라.
+- "파일 전체 내용을 한 문장으로 요약" 같은 예시 문구를 그대로 쓰지 마라.
+- 반드시 [PDF 본문]의 실제 내용을 바탕으로 값을 채워라.
+- JSON 객체 하나만 출력하라.
+
+[PDF 본문]
+{context}
+
+[출력 JSON 형식]
+{{
+  "one_line_summary": "PDF 본문을 바탕으로 실제 한 줄 요약을 작성",
+  "full_summary": [
+    "PDF 본문을 바탕으로 실제 핵심 요약 문장 1",
+    "PDF 본문을 바탕으로 실제 핵심 요약 문장 2",
+    "PDF 본문을 바탕으로 실제 핵심 요약 문장 3",
+    "PDF 본문을 바탕으로 실제 핵심 요약 문장 4",
+    "PDF 본문을 바탕으로 실제 핵심 요약 문장 5"
+  ],
+  "key_concepts": [
+    "PDF 본문에 등장하는 실제 핵심 개념 1",
+    "PDF 본문에 등장하는 실제 핵심 개념 2",
+    "PDF 본문에 등장하는 실제 핵심 개념 3",
+    "PDF 본문에 등장하는 실제 핵심 개념 4",
+    "PDF 본문에 등장하는 실제 핵심 개념 5"
+  ],
+  "exam_points": [
+    "PDF 본문을 바탕으로 시험에 나올 수 있는 포인트 1",
+    "PDF 본문을 바탕으로 시험에 나올 수 있는 포인트 2",
+    "PDF 본문을 바탕으로 시험에 나올 수 있는 포인트 3"
+  ]
+}}
+""".strip()
+
+    payload = {
+        "model": model_name,
+        "prompt": "/no_think\n반드시 최종 답변만 한국어 JSON으로 출력하세요. 영어 사고 과정은 출력하지 마세요.\n" + prompt,
+        "stream": True,
+        "think": False,
+        "format": "json",
+        "options": {
+            "temperature": 0.1,
+            "num_predict": int(max(num_predict, 1200))
+        }
+    }
+
+    try:
+        summary_raw = call_ollama_streaming(
+            ollama_url=ollama_url,
+            payload=payload,
+            stream_read_timeout=stream_read_timeout
+        )
+
+        summary_raw = clean_summary_output(summary_raw)
+
+        try:
+            summary_json = parse_ollama_json(summary_raw)
+            return summary_json_to_markdown(summary_json)
+
+        except Exception:
+            # JSON 파싱이 실패해도 화면에는 정리된 텍스트를 보여준다.
+            return clean_summary_output(summary_raw).strip()
+
+    except Exception as e:
+        return f"전체 요약 생성 실패: {e}"
+
+
+def group_chunks_by_material(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    여러 PDF 청크를 파일별로 묶는다.
+    파일별 핵심 요약과 이후 학습 로드맵 생성의 기본 단위가 된다.
+    """
+    grouped: Dict[str, Dict[str, Any]] = {}
+
+    for chunk in chunks:
+        file_name = str(chunk.get("file_name", "uploaded.pdf"))
+        material_id = str(chunk.get("material_id", make_safe_id(file_name)))
+
+        if material_id not in grouped:
+            grouped[material_id] = {
+                "material_id": material_id,
+                "file_name": file_name,
+                "chunks": []
+            }
+
+        grouped[material_id]["chunks"].append(chunk)
+
+    result = list(grouped.values())
+    result.sort(key=lambda x: x["file_name"])
+    return result
+
+
+def generate_document_summaries_by_file_with_ollama(
+    ollama_url: str,
+    model_name: str,
+    chunks: List[Dict[str, Any]],
+    num_predict: int,
+    stream_read_timeout: int
+) -> List[Dict[str, str]]:
+    """
+    여러 PDF를 파일별로 나누어 각각 핵심 요약을 생성한다.
+    """
+    summaries = []
+
+    for item in group_chunks_by_material(chunks):
+        file_name = item["file_name"]
+        material_id = item["material_id"]
+        file_chunks = item["chunks"]
+
+        summary = generate_document_summary_with_ollama(
+            ollama_url=ollama_url,
+            model_name=model_name,
+            chunks=file_chunks,
+            num_predict=num_predict,
+            stream_read_timeout=stream_read_timeout
+        )
+
+        summaries.append({
+            "material_id": material_id,
+            "file_name": file_name,
+            "summary": summary
+        })
+
+    return summaries
+
+
+def summaries_by_file_to_markdown(summaries: List[Dict[str, str]]) -> str:
+    """
+    파일별 요약 결과를 다운로드 가능한 하나의 Markdown 텍스트로 합친다.
+    """
+    parts = []
+
+    for item in summaries:
+        file_name = item.get("file_name", "uploaded.pdf")
+        summary = item.get("summary", "")
+        parts.append(f"# {file_name}\n\n{summary}")
+
+    return "\n\n---\n\n".join(parts).strip()
+
+
+# =========================
+# 6-2. 학습 로드맵 생성
+# =========================
+
+def normalize_file_summaries_for_roadmap(file_summaries: Any) -> Dict[str, str]:
+    """
+    파일별 요약 결과를 로드맵에서 쓰기 쉽게 dict 형태로 정리한다.
+    예상 형태:
+    - {"파일명.pdf": "요약 내용"}
+    - [{"file_name": "...", "summary": "..."}]
+    """
+    if not file_summaries:
+        return {}
+
+    if isinstance(file_summaries, dict):
+        return {str(k): str(v) for k, v in file_summaries.items()}
+
+    if isinstance(file_summaries, list):
+        result = {}
+
+        for item in file_summaries:
+            if isinstance(item, dict):
+                file_name = str(item.get("file_name", "업로드 자료"))
+                summary = str(item.get("summary", ""))
+                result[file_name] = summary
+
+        return result
+
+    return {}
+
+
+def compact_page_ranges(pages: List[int]) -> str:
+    pages = sorted(set(int(p) for p in pages if p is not None))
+
+    if not pages:
+        return "-"
+
+    ranges = []
+    start = pages[0]
+    prev = pages[0]
+
+    for page in pages[1:]:
+        if page == prev + 1:
+            prev = page
+        else:
+            if start == prev:
+                ranges.append(str(start))
+            else:
+                ranges.append(f"{start}-{prev}")
+            start = page
+            prev = page
+
+    if start == prev:
+        ranges.append(str(start))
+    else:
+        ranges.append(f"{start}-{prev}")
+
+    return ", ".join(ranges)
+
+
+def get_chunk_file_name(chunk: Dict[str, Any]) -> str:
+    return str(
+        chunk.get("file_name")
+        or chunk.get("material_name")
+        or chunk.get("source_file")
+        or "업로드 자료"
+    )
+
+
+def get_summary_hint(file_name: str, file_summaries: Dict[str, str]) -> str:
+    summary = file_summaries.get(file_name, "")
+
+    if not summary:
+        return "해당 자료의 핵심 개념을 정리하고, 중요한 용어를 확인한다."
+
+    lines = []
+
+    for line in summary.splitlines():
+        line = line.strip()
+
+        if not line:
+            continue
+
+        if line.startswith("#"):
+            continue
+
+        line = line.lstrip("- ").strip()
+
+        if line:
+            lines.append(line)
+
+        if len(lines) >= 2:
+            break
+
+    if not lines:
+        return "해당 자료의 핵심 개념을 정리하고, 중요한 용어를 확인한다."
+
+    return " / ".join(lines)[:160]
+
+
+def build_learning_roadmap_df(
+    chunks: List[Dict[str, Any]],
+    duration_days: int,
+    file_summaries: Optional[Any] = None
+) -> pd.DataFrame:
+    """
+    선택한 기간에 맞춰 PDF 학습 로드맵을 생성한다.
+    - 전체 기간의 약 70%는 진도 학습
+    - 나머지는 누적 복습 / 문제풀이 / 최종 점검
+    """
+    duration_days = int(duration_days)
+    summaries = normalize_file_summaries_for_roadmap(file_summaries)
+
+    valid_chunks = []
+
+    for chunk in chunks:
+        text = str(chunk.get("text", "")).strip()
+
+        if not text:
+            continue
+
+        if is_table_of_contents_like(text):
+            continue
+
+        if int(chunk.get("quality_score", 0)) < 25:
+            continue
+
+        valid_chunks.append(chunk)
+
+    if not valid_chunks:
+        valid_chunks = chunks
+
+    valid_chunks = sorted(
+        valid_chunks,
+        key=lambda x: (
+            get_chunk_file_name(x),
+            int(x.get("page", 0)),
+            str(x.get("chunk_id", ""))
+        )
+    )
+
+    if not valid_chunks:
+        return pd.DataFrame([
+            {
+                "Day": 1,
+                "구분": "오류",
+                "학습 범위": "학습할 청크가 없습니다.",
+                "학습 목표": "PDF 처리를 먼저 진행하세요.",
+                "할 일": "PDF 업로드 후 청킹을 다시 실행하세요.",
+                "점검": "-"
+            }
+        ])
+
+    learning_days = max(1, int(duration_days * 0.7))
+    learning_days = min(learning_days, duration_days)
+    learning_days = min(learning_days, len(valid_chunks))
+
+    review_interval = 3 if duration_days <= 7 else 5 if duration_days <= 28 else 7
+    per_day = max(1, (len(valid_chunks) + learning_days - 1) // learning_days)
+
+    rows = []
+
+    for day in range(1, duration_days + 1):
+        if day <= learning_days:
+            start = (day - 1) * per_day
+            end = start + per_day
+            day_chunks = valid_chunks[start:end]
+
+            grouped: Dict[str, List[int]] = {}
+
+            for chunk in day_chunks:
+                file_name = get_chunk_file_name(chunk)
+                grouped.setdefault(file_name, [])
+                grouped[file_name].append(int(chunk.get("page", 0)))
+
+            scope_parts = []
+
+            for file_name, pages in grouped.items():
+                scope_parts.append(f"{file_name} p.{compact_page_ranges(pages)}")
+
+            scope = " / ".join(scope_parts) if scope_parts else "전체 누적 범위"
+
+            main_file = get_chunk_file_name(day_chunks[0]) if day_chunks else "업로드 자료"
+            goal = get_summary_hint(main_file, summaries)
+
+            task = (
+                "1) 해당 범위 핵심 요약 읽기\n"
+                "2) 중요한 용어 3개 정리\n"
+                "3) 이해 안 되는 부분을 질문으로 바꾸기\n"
+                "4) 객관식/OX/빈칸 문제 중 2개 생성해서 확인"
+            )
+
+            check = "오늘 범위에서 핵심 개념 3개를 설명할 수 있으면 통과"
+
+            if day % review_interval == 0:
+                check += " + 이전 학습 내용 10분 누적 복습"
+
+            rows.append({
+                "Day": day,
+                "구분": "진도 학습",
+                "학습 범위": scope,
+                "학습 목표": goal,
+                "할 일": task,
+                "점검": check
+            })
+
+        else:
+            review_type = "누적 복습"
+
+            if day == duration_days:
+                review_type = "최종 점검"
+
+            task = (
+                "1) 지금까지의 파일별 핵심 요약 다시 읽기\n"
+                "2) 헷갈리는 개념을 약점 개념에 입력해서 문제 생성\n"
+                "3) 틀린 문제의 근거 페이지 다시 확인\n"
+                "4) 빈칸/OX 문제로 빠르게 재점검"
+            )
+
+            if review_type == "최종 점검":
+                task = (
+                    "1) 전체 PDF 핵심 개념 목록 훑기\n"
+                    "2) 파일별 핵심 요약을 기준으로 최종 복습\n"
+                    "3) 약점 개념 중심으로 문제 5개 생성\n"
+                    "4) 틀린 문제만 다시 정리"
+                )
+
+            rows.append({
+                "Day": day,
+                "구분": review_type,
+                "학습 범위": "전체 누적 범위",
+                "학습 목표": "학습한 자료를 잊지 않도록 누적 복습하고 약점 개념을 확인한다.",
+                "할 일": task,
+                "점검": "틀린 문제와 헷갈린 개념을 오답노트에 정리"
+            })
+
+    return pd.DataFrame(rows)
+
+
+def roadmap_df_to_markdown(roadmap_df: pd.DataFrame, duration_days: int) -> str:
+    md = f"# {duration_days}일 학습 로드맵\n\n"
+
+    for _, row in roadmap_df.iterrows():
+        md += f"## Day {row['Day']} - {row['구분']}\n\n"
+        md += f"**학습 범위:** {row['학습 범위']}\n\n"
+        md += f"**학습 목표:** {row['학습 목표']}\n\n"
+        md += f"**할 일:**\n{row['할 일']}\n\n"
+        md += f"**점검:** {row['점검']}\n\n"
+        md += "---\n\n"
+
+    return md.strip()
+
+
+# =========================
 # 7. 검증과 완화
 # =========================
 
@@ -743,6 +1426,7 @@ def clean_quiz_schema(
     answer = str(quiz.get("answer", "")).strip()
 
     clean = {
+        "question_type": str(quiz.get("question_type", "multiple_choice")).strip(),
         "question_polarity": infer_polarity(
             str(quiz.get("question", "")),
             str(quiz.get("question_polarity", "positive"))
@@ -757,8 +1441,32 @@ def clean_quiz_schema(
         "source_pages": filter_source_pages(quiz.get("source_pages", []), allowed_pages),
         "concept": str(quiz.get("concept", "")).strip(),
         "difficulty": int(expected_difficulty),
-        "hint": str(quiz.get("hint", "")).strip()
+        "hint": str(quiz.get("hint", "")).strip(),
+        "grading_criteria": quiz.get("grading_criteria", [])
     }
+
+    # 빈칸 주관식 보정
+    # 모델이 ____, ___처럼 다른 길이의 밑줄을 출력해도 표준 _____로 통일한다.
+    if clean["question_type"] == "fill_blank":
+        clean["question"] = normalize_blank_marker(clean["question"])
+        clean["choices"] = []
+        clean["choice_explanations"] = []
+        return clean
+
+    # OX 문제 보정
+    if clean["question_type"] == "ox":
+        clean["choices"] = ["O", "X"]
+
+        answer_upper = str(clean["answer"]).strip().upper()
+
+        if answer_upper in ["O", "○", "TRUE", "참", "맞다", "옳다"]:
+            clean["answer"] = "O"
+        elif answer_upper in ["X", "×", "FALSE", "거짓", "틀리다", "아니다"]:
+            clean["answer"] = "X"
+
+        # OX 문제는 O/X 자체가 보기이므로 별도의 보기별 해설을 보여주지 않는다.
+        clean["choice_explanations"] = []
+        return clean
 
     raw_explanations = quiz.get("choice_explanations", [])
 
@@ -788,12 +1496,46 @@ def clean_quiz_schema(
 
 
 def basic_validate_quiz(quiz: Dict[str, Any]) -> Tuple[bool, str]:
-    # 여기서 너무 빡세게 막지 않는다. 핵심 구조만 검사한다.
     if not quiz.get("question"):
         return False, "문제가 비어 있습니다."
 
-    choices = quiz.get("choices", [])
     answer = quiz.get("answer", "")
+
+    if not answer:
+        return False, "정답 또는 모범 답안이 비어 있습니다."
+
+    question_type = quiz.get("question_type", "multiple_choice")
+
+    # OX 문제 검증
+    if question_type == "ox":
+        choices = quiz.get("choices", [])
+
+        if choices != ["O", "X"]:
+            return False, "OX 문제의 보기는 ['O', 'X']여야 합니다."
+
+        if answer not in ["O", "X"]:
+            return False, "OX 문제의 정답은 O 또는 X여야 합니다."
+
+        if len(str(quiz.get("question", ""))) > 220:
+            return False, "문제 문장이 너무 깁니다."
+
+        return True, "OX 문제 검증 통과"
+
+    # 빈칸 주관식 검증
+    if question_type == "fill_blank":
+        question = str(quiz.get("question", ""))
+
+        # 모델이 ___, ____, _____ 중 무엇을 출력해도 3개 이상의 밑줄이면 빈칸으로 인정한다.
+        if not has_blank_marker(question):
+            return False, "빈칸 주관식 문제에는 ___ 또는 _____ 같은 빈칸 표시가 필요합니다."
+
+        if len(str(answer)) > 50:
+            return False, "빈칸 정답이 너무 깁니다."
+
+        return True, "빈칸 주관식 검증 통과"
+
+    # 객관식 검증
+    choices = quiz.get("choices", [])
 
     if not isinstance(choices, list) or len(choices) != 4:
         return False, "보기 4개가 필요합니다."
@@ -810,7 +1552,7 @@ def basic_validate_quiz(quiz: Dict[str, Any]) -> Tuple[bool, str]:
     if any(len(str(c)) > 130 for c in choices):
         return False, "보기 중 하나가 너무 깁니다."
 
-    return True, "검증 통과"
+    return True, "객관식 검증 통과"
 
 
 def grounded_warning(quiz: Dict[str, Any], context_text: str, banned_terms: List[str]) -> List[str]:
@@ -929,92 +1671,130 @@ def generate_quiz_with_ollama(
 
     return quiz
 
+
 # =========================
-# 8. 실제 자료 핵심 요약 생성
+# FastAPI용 보조 함수
 # =========================
 
-def build_summary_context_from_chunks(
+def generate_material_summary_with_ollama(
     chunks: List[Dict[str, Any]],
-    max_chars: int = 12000
-) -> str:
+    ollama_url: str,
+    model_name: str,
+    user_id: int = 1,
+    num_predict: int = 900,
+    stream_read_timeout: int = 120
+) -> Dict[str, Any]:
     """
-    업로드된 PDF 청크 중 품질이 좋은 본문 청크를 페이지 순서대로 모아
-    Ollama 요약에 넣을 context를 만든다.
+    FastAPI 자료 분석 화면용 요약.
+    기존 Streamlit의 generate_document_summary_with_ollama() 로직을 그대로 사용하되,
+    HTML 화면의 summary/keywords/concepts 구조로 변환한다.
     """
-    good_chunks = []
-
-    for chunk in chunks:
-        text = str(chunk.get("text", "")).strip()
-
-        if not text:
-            continue
-
-        if is_table_of_contents_like(text):
-            continue
-
-        if int(chunk.get("quality_score", 0)) < 25:
-            continue
-
-        good_chunks.append(chunk)
-
-    if not good_chunks:
-        good_chunks = [c for c in chunks if str(c.get("text", "")).strip()]
-
-    good_chunks = sorted(
-        good_chunks,
-        key=lambda x: (
-            str(x.get("file_name", "")),
-            int(x.get("page", 0)),
-            str(x.get("chunk_id", ""))
-        )
+    summary_md = generate_document_summary_with_ollama(
+        ollama_url=ollama_url,
+        model_name=model_name,
+        chunks=chunks,
+        num_predict=num_predict,
+        stream_read_timeout=stream_read_timeout
     )
 
-    context_parts = []
-    current_len = 0
-
-    for chunk in good_chunks:
-        file_name = chunk.get("file_name", "uploaded.pdf")
-        page = chunk.get("page", "")
-        text = str(chunk.get("text", "")).strip()[:900]
-        block = f"[파일: {file_name} / 페이지: {page}]\n{text}\n"
-
-        if current_len + len(block) > max_chars:
-            break
-
-        context_parts.append(block)
-        current_len += len(block)
-
-    return "\n\n".join(context_parts)
+    return material_summary_markdown_to_cards(summary_md, chunks, user_id=user_id)
 
 
-def clean_summary_json(raw_text: str) -> Dict[str, Any]:
+def material_summary_markdown_to_cards(
+    summary_md: str,
+    chunks: List[Dict[str, Any]],
+    user_id: int = 1
+) -> Dict[str, Any]:
     """
-    Ollama가 코드블록이나 불필요한 문장을 섞어도 JSON만 파싱한다.
+    Streamlit 요약 Markdown을 HTML UI 카드 구조로 변환한다.
     """
-    raw_text = str(raw_text).strip()
-    raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+    text = str(summary_md or "").strip()
 
-    start = raw_text.find("{")
-    end = raw_text.rfind("}") + 1
+    if not text or text.startswith("전체 요약 생성 실패"):
+        return fallback_summary_from_chunks(chunks, user_id=user_id)
 
-    if start != -1 and end > start:
-        raw_text = raw_text[start:end]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    one_line = ""
+    full_items = []
+    concept_items = []
+    current = None
 
-    try:
-        return json.loads(raw_text)
-    except Exception:
-        repaired = repair_json(raw_text)
-        return json.loads(repaired)
+    for line in lines:
+        if "한 줄 요약" in line:
+            current = "one"
+            continue
+        if "전체 핵심 요약" in line:
+            current = "summary"
+            continue
+        if "핵심 개념" in line:
+            current = "concepts"
+            continue
+        if "시험 대비" in line:
+            current = "exam"
+            continue
+
+        cleaned = line.lstrip("- ").strip()
+        if not cleaned:
+            continue
+
+        if current == "one" and not one_line:
+            one_line = cleaned
+        elif current == "summary":
+            full_items.append(cleaned)
+        elif current == "concepts":
+            concept_items.append(cleaned)
+
+    if not one_line and full_items:
+        one_line = full_items[0]
+
+    summary = " ".join(full_items[:5]).strip() or one_line or text[:500]
+
+    keywords = []
+    for item in concept_items:
+        name = re.split(r"[:：\-–]", item, maxsplit=1)[0].strip()
+        if name and len(name) <= 30 and name not in keywords:
+            keywords.append(name)
+    if not keywords:
+        preview_text = " ".join(str(c.get("text", ""))[:200] for c in chunks[:6])
+        keywords = tokenize_query(preview_text)[:5]
+
+    concepts = []
+    pages = [int(c.get("page", 1)) for c in chunks if c.get("page") is not None]
+    default_page = min(pages) if pages else 1
+
+    for idx, item in enumerate(concept_items[:5], start=1):
+        if ":" in item:
+            name, desc = item.split(":", 1)
+        elif "：" in item:
+            name, desc = item.split("：", 1)
+        elif "-" in item:
+            name, desc = item.split("-", 1)
+        else:
+            name, desc = item[:25], item
+
+        concepts.append({
+            "name": name.strip() or f"핵심 개념 {idx}",
+            "summary": desc.strip() or item.strip(),
+            "source_page": default_page
+        })
+
+    if not concepts:
+        fallback = fallback_summary_from_chunks(chunks, user_id=user_id)
+        concepts = fallback.get("concepts", [])
+
+    return {
+        "user_id": user_id,
+        "summary": summary,
+        "keywords": keywords[:8],
+        "concepts": concepts[:6],
+        "raw_markdown": text
+    }
 
 
 def fallback_summary_from_chunks(
     chunks: List[Dict[str, Any]],
     user_id: int = 1
 ) -> Dict[str, Any]:
-    """
-    Ollama 요약 실패 시에도 화면이 비지 않도록,
-    청크 앞부분을 이용해 최소 요약을 만든다.
-    """
     usable = [
         c for c in chunks
         if str(c.get("text", "")).strip()
@@ -1030,124 +1810,121 @@ def fallback_summary_from_chunks(
         }
 
     preview_text = " ".join(str(c.get("text", ""))[:250] for c in usable[:5])
-    tokens = tokenize_query(preview_text)
-    keywords = tokens[:8]
+    keywords = tokenize_query(preview_text)[:8]
 
     concepts = []
     for c in usable[:4]:
         text = str(c.get("text", "")).replace("\n", " ").strip()
         concepts.append({
             "name": c.get("file_name", "업로드 자료"),
-            "summary": text[:120] + ("..." if len(text) > 120 else ""),
+            "summary": text[:140] + ("..." if len(text) > 140 else ""),
             "source_page": c.get("page", 1)
         })
 
     return {
         "user_id": user_id,
-        "summary": "업로드된 자료에서 추출한 주요 본문을 바탕으로 핵심 내용을 확인할 수 있습니다. Ollama 요약 생성에 실패하여 본문 기반 간단 요약을 표시합니다.",
+        "summary": "업로드된 자료의 주요 본문을 바탕으로 핵심 내용을 확인할 수 있습니다. 아래 키워드와 개념 카드는 추출된 본문을 기준으로 정리한 내용입니다.",
         "keywords": keywords,
         "concepts": concepts
     }
 
 
-def generate_material_summary_with_ollama(
-    chunks: List[Dict[str, Any]],
-    ollama_url: str,
-    model_name: str,
-    user_id: int = 1,
-    num_predict: int = 1200,
-    stream_read_timeout: int = 180
-) -> Dict[str, Any]:
-    """
-    업로드된 자료 전체를 실제로 요약한다.
-    반환 형식은 frontend/index.html의 renderAnalysis()가 바로 사용할 수 있게 맞춘다.
-    """
-    context = build_summary_context_from_chunks(chunks)
+def build_tutor_answer_prompt(
+    question: str,
+    retrieved_chunks: List[Dict[str, Any]],
+    recent_history: Optional[List[Dict[str, str]]] = None
+) -> str:
+    context = "\n\n".join(
+        f"[근거 {idx + 1}]\n"
+        f"파일: {c.get('file_name', '')}\n"
+        f"페이지: {c.get('page')}\n"
+        f"내용: {c.get('text', '')[:700]}"
+        for idx, c in enumerate(retrieved_chunks[:6])
+    )
 
-    if not context.strip():
-        return fallback_summary_from_chunks(chunks, user_id=user_id)
+    history_text = "\n".join(
+        f"{h.get('role')}: {h.get('content')}"
+        for h in (recent_history or [])[-4:]
+    )
 
-    prompt = f"""
-너는 대학 강의자료를 요약하는 AI 학습 도우미이다.
+    return f"""
+너는 한국사 강의자료 기반 AI 튜터이다.
 
-반드시 한국어로만 답하라.
-아래 [강의자료 본문]에 있는 내용만 사용하라.
-본문에 없는 사건, 인물, 연도, 용어, 해석을 추가하지 마라.
-생각 과정이나 분석 과정을 출력하지 마라.
-반드시 JSON 객체 하나만 출력하라.
+아래 규칙을 반드시 지켜라.
+- 반드시 한국어로만 답하라.
+- JSON, 표, 코드블록을 출력하지 마라.
+- step, action, input, output 같은 분석 형식을 출력하지 마라.
+- 생각 과정, 추론 과정, 자기 점검을 출력하지 마라.
+- "Okay", "Wait", "Hmm", "Let's" 같은 영어 표현을 쓰지 마라.
+- 학생에게 보여줄 최종 답변만 작성하라.
+- 자료에 없는 내용은 확정적으로 말하지 말고 "자료에서 확인되는 범위에서는"이라고 표현하라.
+- 시대 흐름 질문은 시대 순서대로 4~7문장으로 설명하라.
+- 마지막에 후속 질문을 유도하는 한 문장을 붙여라.
 
-[강의자료 본문]
+[이전 대화]
+{history_text if history_text else "없음"}
+
+[학생 질문]
+{question}
+
+[강의자료 근거]
 {context}
 
-[출력 JSON 형식]
-{{
-  "summary": "자료 전체의 핵심 내용을 5~7문장으로 자연스럽게 요약",
-  "keywords": ["핵심 키워드1", "핵심 키워드2", "핵심 키워드3", "핵심 키워드4", "핵심 키워드5"],
-  "concepts": [
-    {{"name": "핵심 개념1", "summary": "이 개념에 대한 1~2문장 설명", "source_page": 1}},
-    {{"name": "핵심 개념2", "summary": "이 개념에 대한 1~2문장 설명", "source_page": 2}},
-    {{"name": "핵심 개념3", "summary": "이 개념에 대한 1~2문장 설명", "source_page": 3}}
-  ]
-}}
+최종 답변:
 """.strip()
 
-    payload = {
-        "model": model_name,
-        "prompt": "/no_think\n" + prompt,
-        "stream": True,
-        "think": False,
-        "format": "json",
-        "options": {
-            "temperature": 0.1,
-            "num_predict": int(num_predict)
-        }
-    }
 
+def build_tutor_extra_keywords(question: str) -> List[str]:
+    q = str(question)
+    keywords = []
+
+    if any(w in q for w in ["흐름", "시대", "순서", "정리", "전체"]) or ("부터" in q and "까지" in q):
+        keywords.extend([
+            "고조선", "부여", "고구려", "백제", "신라", "가야",
+            "삼국", "통일신라", "발해", "후삼국", "후백제",
+            "후고구려", "태봉", "궁예", "견훤", "왕건", "고려"
+        ])
+
+    for term in ["고조선", "삼국", "통일신라", "발해", "후삼국", "고려", "왕건", "견훤", "궁예", "태봉"]:
+        if term in q and term not in keywords:
+            keywords.append(term)
+
+    return keywords
+
+
+def clean_tutor_answer_text(text: str) -> str:
+    text = str(text or "").strip()
+    text = text.replace("```json", "").replace("```", "").strip()
+
+    # JSON 분석 출력 방어
     try:
-        raw = call_ollama_streaming(
-            ollama_url=ollama_url,
-            payload=payload,
-            stream_read_timeout=stream_read_timeout
-        )
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start != -1 and end > start:
+            data = json.loads(text[start:end])
+            if isinstance(data, dict):
+                for key in ["answer", "final_answer", "response"]:
+                    if data.get(key):
+                        return str(data[key]).strip()
+                if {"step", "action", "input", "output"}.intersection(data.keys()):
+                    return str(data.get("output", "")).strip() or "자료에서 확인되는 범위에서는 답변을 다시 생성해야 합니다."
+    except Exception:
+        pass
 
-        data = clean_summary_json(raw)
+    markers = ["최종 답변:", "최종답변:", "답변:", "정리하면,"]
+    for marker in markers:
+        if marker in text:
+            text = text.split(marker, 1)[-1].strip()
+            break
 
-        summary = str(data.get("summary", "")).strip()
-        keywords = data.get("keywords", [])
-        concepts = data.get("concepts", [])
+    banned_prefixes = ("Okay", "Wait", "Hmm", "Let's", '"step"', '"action"', "{", "}")
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith(banned_prefixes):
+            continue
+        lines.append(stripped)
 
-        if not isinstance(keywords, list):
-            keywords = []
-        if not isinstance(concepts, list):
-            concepts = []
-
-        cleaned_concepts = []
-        for item in concepts:
-            if not isinstance(item, dict):
-                continue
-
-            try:
-                source_page = int(item.get("source_page", 1))
-            except Exception:
-                source_page = 1
-
-            cleaned_concepts.append({
-                "name": str(item.get("name", "핵심 개념")).strip(),
-                "summary": str(item.get("summary", "")).strip(),
-                "source_page": source_page
-            })
-
-        if not summary:
-            return fallback_summary_from_chunks(chunks, user_id=user_id)
-
-        return {
-            "user_id": user_id,
-            "summary": summary,
-            "keywords": [str(k).strip() for k in keywords if str(k).strip()][:10],
-            "concepts": cleaned_concepts[:8]
-        }
-
-    except Exception as e:
-        result = fallback_summary_from_chunks(chunks, user_id=user_id)
-        result["summary"] = result["summary"] + f"\n\n요약 생성 오류: {e}"
-        return result
+    return "\n".join(lines).strip() or "자료에서 확인되는 범위에서는 답변을 생성하지 못했습니다."
