@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+chromadb
+pandas
+pymupdf
+requests
+sentence-transformers
+json-repair
