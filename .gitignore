@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ChromaDB persistent store (large, regenerated locally)
+demo/chroma_lecture_db/
+chroma_lecture_db/
+
+# OS
+.DS_Store

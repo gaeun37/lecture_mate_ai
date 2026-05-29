@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from datetime import datetime
 import json
 
 from fastapi import FastAPI, UploadFile, File, Form
@@ -114,6 +115,8 @@ app_state: Dict[str, Any] = {
     "roadmap": None,
     "roadmap_markdown": "",
     "generated_sets": {},
+    "latest_question_set": {"set_key": "", "title": "", "origin": "", "created_at": "", "questions": []},
+    "question_history_sets": [],
     "tutor_history": [],
 }
 
@@ -245,6 +248,62 @@ def make_source_label(file_name: str, pages: Any) -> str:
     return ""
 
 
+def make_question_set_title(origin: str, questions: List[Dict[str, Any]], explicit_title: Optional[str] = None) -> str:
+    """생성된 문제 묶음을 히스토리 목록에서 보기 좋은 제목으로 만든다."""
+    if explicit_title:
+        return sanitize_user_text(explicit_title)
+
+    count = len(questions or [])
+    first = questions[0] if questions else {}
+    source = first.get("source", {}) if isinstance(first.get("source"), dict) else {}
+    file_name = source.get("file_name", "") or first.get("file_name", "")
+    concept = first.get("concept", "")
+
+    if file_name:
+        return sanitize_user_text(f"{origin} · {file_name} · {count}문제")
+    if concept:
+        return sanitize_user_text(f"{origin} · {concept} · {count}문제")
+    return sanitize_user_text(f"{origin} · {count}문제")
+
+
+def update_latest_question_set(
+    questions: List[Dict[str, Any]],
+    origin: str,
+    set_key: str,
+    title: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    직전 생성 결과와 전체 문제 히스토리를 분리해서 저장한다.
+    - latest_question_set: 화면 중앙의 '직전 생성 문제' 영역에만 표시
+    - question_history_sets: 옆 탭/목록의 '지금까지 생성된 전체 문제'에서 표시
+    """
+    safe_questions = questions or []
+    record = {
+        "set_key": set_key,
+        "title": make_question_set_title(origin, safe_questions, title),
+        "origin": origin,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "question_count": len(safe_questions),
+        "questions": safe_questions,
+    }
+
+    app_state["latest_question_set"] = record
+
+    history = app_state.setdefault("question_history_sets", [])
+    history = [item for item in history if item.get("set_key") != set_key]
+    history.append(record)
+    app_state["question_history_sets"] = history
+
+    return record
+
+
+def get_all_questions_for_user(user_id: int = 1) -> List[Dict[str, Any]]:
+    return [
+        q for q in get_current_questions()
+        if int(q.get("user_id", 1)) == int(user_id)
+    ]
+
+
 def source_from_quiz_or_chunk(quiz: Dict[str, Any], source_chunk: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     source_chunk = source_chunk or {}
     raw_pages = quiz.get("source_pages") or []
@@ -275,6 +334,8 @@ def add_quizzes_to_question_store(
     origin: str,
     source_chunks: Optional[List[Dict[str, Any]]] = None,
     set_key: Optional[str] = None,
+    set_title: Optional[str] = None,
+    update_latest: bool = True,
 ) -> List[Dict[str, Any]]:
     created = []
     source_chunks = source_chunks or []
@@ -300,8 +361,16 @@ def add_quizzes_to_question_store(
         app_state.setdefault("questions", []).append(question)
         created.append(question)
 
-    if set_key:
-        app_state.setdefault("generated_sets", {})[set_key] = created
+    final_set_key = set_key or f"{origin}_{len(app_state.get('generated_sets', {})) + 1}"
+    app_state.setdefault("generated_sets", {})[final_set_key] = created
+
+    if update_latest and created:
+        update_latest_question_set(
+            questions=created,
+            origin=origin,
+            set_key=final_set_key,
+            title=set_title,
+        )
 
     return created
 
@@ -478,6 +547,8 @@ async def upload_materials(
     app_state["roadmap"] = None
     app_state["roadmap_markdown"] = ""
     app_state["generated_sets"] = {}
+    app_state["latest_question_set"] = {"set_key": "", "title": "", "origin": "", "created_at": "", "questions": []}
+    app_state["question_history_sets"] = []
     app_state["tutor_history"] = []
 
     return {
@@ -575,7 +646,13 @@ def generate_file_review(req: FileReviewQuizRequest):
         banned_terms=settings().get("banned_terms", [])
     )
     set_key = f"file_review_{req.material_id}_{len(app_state.get('generated_sets', {})) + 1}"
-    questions = add_quizzes_to_question_store(quizzes, req.user_id, "요약 기반 복습 문제", set_key=set_key)
+    questions = add_quizzes_to_question_store(
+        quizzes,
+        req.user_id,
+        "요약 기반 복습 문제",
+        set_key=set_key,
+        set_title=f"파일별 학습 확인 문제 · {req.material_id} · {req.quiz_count}문제",
+    )
     file_name = questions[0].get("source", {}).get("file_name", req.material_id) if questions else req.material_id
     markdown = review_quizzes_to_markdown(file_name, quizzes)
     return {"user_id": req.user_id, "questions": questions, "quizzes": quizzes, "markdown": markdown, "set_key": set_key}
@@ -632,7 +709,13 @@ def generate_roadmap_day_quizzes(req: RoadmapDayQuizRequest):
     day_chunks = get_chunks_for_roadmap_day(app_state.get("chunks", []), req.duration_days, req.day)
     scope = describe_chunks_scope(day_chunks)
     set_key = f"roadmap_{req.duration_days}_day_{req.day}_{len(app_state.get('generated_sets', {})) + 1}"
-    questions = add_quizzes_to_question_store(quizzes, req.user_id, "로드맵 문제", set_key=set_key)
+    questions = add_quizzes_to_question_store(
+        quizzes,
+        req.user_id,
+        "로드맵 문제",
+        set_key=set_key,
+        set_title=f"로드맵 Day {req.day} 학습 확인 문제 · {req.quiz_count}문제",
+    )
     markdown = roadmap_day_quizzes_to_markdown(req.duration_days, req.day, scope, quizzes)
     return {"user_id": req.user_id, "questions": questions, "quizzes": quizzes, "scope": scope, "markdown": markdown, "set_key": set_key}
 
@@ -702,7 +785,54 @@ def ask_tutor(req: TutorRequest):
 
 @app.get("/api/review/questions")
 def get_questions(user_id: int = 1):
-    return {"user_id": user_id, "questions": get_current_questions()}
+    """지금까지 생성된 전체 문제 목록. 옆 탭의 '지금까지 생성된 전체 문제'에서 사용한다."""
+    return {"user_id": user_id, "questions": get_all_questions_for_user(user_id)}
+
+
+@app.get("/api/review/questions/latest")
+def get_latest_question_set(user_id: int = 1):
+    """직전 요청으로 생성된 문제 묶음만 반환한다."""
+    latest = app_state.get("latest_question_set", {}) or {}
+    questions = [
+        q for q in latest.get("questions", [])
+        if int(q.get("user_id", 1)) == int(user_id)
+    ]
+    return {
+        "user_id": user_id,
+        "set_key": latest.get("set_key", ""),
+        "title": latest.get("title", ""),
+        "origin": latest.get("origin", ""),
+        "created_at": latest.get("created_at", ""),
+        "question_count": len(questions),
+        "questions": questions,
+    }
+
+
+@app.get("/api/review/questions/history")
+def get_question_history(user_id: int = 1):
+    """문제 생성 요청 단위로 묶은 전체 히스토리. 왼쪽/오른쪽 사이드 목록 탭에서 사용한다."""
+    history = []
+    for item in app_state.get("question_history_sets", []):
+        questions = [
+            q for q in item.get("questions", [])
+            if int(q.get("user_id", 1)) == int(user_id)
+        ]
+        if not questions:
+            continue
+        history.append({
+            "set_key": item.get("set_key", ""),
+            "title": item.get("title", ""),
+            "origin": item.get("origin", ""),
+            "created_at": item.get("created_at", ""),
+            "question_count": len(questions),
+            "questions": questions,
+        })
+    return {
+        "user_id": user_id,
+        "sets": history,
+        "questions": get_all_questions_for_user(user_id),
+        "total_questions": len(get_all_questions_for_user(user_id)),
+    }
 
 
 @app.post("/api/review/questions")
@@ -754,11 +884,23 @@ def generate_question(req: QuestionRequest):
         banned_terms=settings().get("banned_terms", [])
     )
 
-    created = add_quizzes_to_question_store([quiz], req.user_id, "맞춤 문제", source_chunks=[retrieved[0]], set_key="latest_user_quiz")
+    set_key = f"latest_user_quiz_{len(app_state.get('generated_sets', {})) + 1}"
+    created = add_quizzes_to_question_store(
+        [quiz],
+        req.user_id,
+        "맞춤 문제",
+        source_chunks=[retrieved[0]],
+        set_key=set_key,
+        set_title=f"학생 요청 기반 문제 · {req.query[:30]}",
+    )
     return {
         "user_id": req.user_id,
-        "questions": app_state["questions"],
+        # 화면 중앙에는 직전 요청으로 생성된 문제만 보여주기 위해 created만 반환한다.
+        "questions": created,
         "latest_question": created[0],
+        "latest_question_set": app_state.get("latest_question_set", {}),
+        # 필요하면 옆 탭의 히스토리에서 전체 문제를 불러올 수 있다.
+        "all_questions_count": len(app_state.get("questions", [])),
         "retrieved_chunks": [
             {
                 "rank": idx + 1,
@@ -891,7 +1033,13 @@ def generate_remedial_quizzes(req: RemedialQuizRequest):
         banned_terms=settings().get("banned_terms", [])
     )
     set_key = f"remedial_{make_safe_id(req.target_concept)}_{len(app_state.get('generated_sets', {})) + 1}"
-    questions = add_quizzes_to_question_store(quizzes, req.user_id, "보충 문제", set_key=set_key)
+    questions = add_quizzes_to_question_store(
+        quizzes,
+        req.user_id,
+        "보충 문제",
+        set_key=set_key,
+        set_title=f"{req.target_concept} 보충 문제 · {req.quiz_count}문제",
+    )
     markdown = review_quizzes_to_markdown(f"{req.target_concept}_보충", quizzes)
     return {"user_id": req.user_id, "questions": questions, "quizzes": quizzes, "markdown": markdown, "set_key": set_key}
 
