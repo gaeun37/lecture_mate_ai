@@ -92,10 +92,10 @@ DEFAULT_SETTINGS = {
     "collection_name": "pdf_lecture_chunks",
     "ollama_url": "http://localhost:11434/api/generate",
     "ollama_model": "qwen3:4b",
-    "top_k": 2,
+    "top_k": 4,
     "chunk_size": 800,
     "chunk_overlap": 120,
-    "num_predict": 900,
+    "num_predict": 1200,
     "stream_timeout": 120,
     "extra_keywords": [],
     "banned_terms": [],
@@ -147,7 +147,7 @@ class QuestionRequest(BaseModel):
     question_type: str = "4지선다 객관식"
     question_direction: str = "자동(긍정형 우선)"
     weak_concept: str = ""
-    top_k: int = 2
+    top_k: int = 4
 
 
 class AnswerSubmitRequest(BaseModel):
@@ -755,7 +755,7 @@ def ask_tutor(req: TutorRequest):
         "stream": True,
         "format": "json",
         "think": False,
-        "options": {"temperature": 0.1, "num_predict": 500}
+        "options": {"temperature": 0.2, "num_predict": 700}
     }
 
     try:
@@ -851,7 +851,7 @@ def generate_question(req: QuestionRequest):
         collection=collection,
         query=search_query,
         embedding_model=embedding_model,
-        top_k=req.top_k,
+        top_k=max(req.top_k, 4),
         extra_keywords=settings().get("extra_keywords", [])
     )
 
@@ -879,7 +879,7 @@ def generate_question(req: QuestionRequest):
         allowed_pages=allowed_pages,
         expected_difficulty=get_level_number(req.student_level),
         context_text=context_text,
-        num_predict=int(settings()["num_predict"]),
+        num_predict=max(int(settings()["num_predict"]), 1200),
         stream_read_timeout=int(settings()["stream_timeout"]),
         banned_terms=settings().get("banned_terms", [])
     )

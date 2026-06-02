@@ -75,6 +75,14 @@ HANJA_CHAR_MAP = {
 HANJA_RE = re.compile(r"[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF]")
 KANA_RE = re.compile(r"[\u3040-\u30FF]")
 
+# 한자를 한글 독음으로 폭넓게 변환하기 위한 선택적 라이브러리.
+# 설치되어 있으면(pip install hanja) 아래 작은 맵보다 훨씬 많은 한자를 처리한다.
+# 없으면 기존 HANJA_*_MAP 폴백만으로 동작한다.
+try:
+    import hanja as _hanja_lib
+except Exception:
+    _hanja_lib = None
+
 
 def contains_hanja(text: Any) -> bool:
     return HANJA_RE.search(str(text or "")) is not None
@@ -87,10 +95,22 @@ def sanitize_user_text(text: Any) -> str:
     """
     value = str(text or "")
 
+    # 1) 자주 나오는 다글자 한자 어구를 먼저 한글로 치환한다.
     for src, dst in HANJA_PHRASE_MAP.items():
         value = value.replace(src, dst)
 
+    # 2) 라이브러리가 있으면 남은 한자를 한글 독음으로 폭넓게 변환한다.
+    #    (예: 樂浪郡 -> 낙랑군). 변환에 실패해도 아래 폴백이 처리한다.
+    if _hanja_lib is not None and HANJA_RE.search(value):
+        try:
+            value = _hanja_lib.translate(value, "substitution")
+        except Exception:
+            pass
+
+    # 3) 그래도 남은 한자는 글자 단위 폴백 맵으로 변환한다.
     value = "".join(HANJA_CHAR_MAP.get(ch, ch) for ch in value)
+
+    # 4) 끝까지 변환되지 않은 한자/가나만 제거한다(여기까지 오면 거의 없음).
     value = HANJA_RE.sub("", value)
     value = KANA_RE.sub("", value)
 
@@ -664,9 +684,10 @@ def build_quiz_prompt(
 [문제 유형별 규칙]
 - 4지선다 객관식 문제를 만든다.
 - choices에는 보기 4개를 반드시 작성한다.
-- 보기 4개는 서로 다른 내용이어야 한다.
+- 보기 4개는 서로 다른 내용이어야 하며, 길이와 문장 구조를 비슷하게 맞춰 정답이 길이/형식만으로 드러나지 않게 한다.
+- 오답 3개는 교안에 등장하는 같은 주제 범위의 다른 내용을 활용해 그럴듯하게 만들되, 교안 근거와 명확히 어긋나야 한다. 너무 동떨어지거나 우스운 보기, 정답과 거의 같은 보기는 만들지 마라.
 - answer는 choices 중 하나와 글자까지 완전히 같아야 한다.
-- choice_explanations에는 보기 4개 각각의 해설을 작성한다.
+- choice_explanations에는 보기 4개 각각의 해설을 작성하되, 정답은 왜 맞는지, 오답은 어떤 점에서 교안 근거와 어긋나는지 구체적으로 쓴다.
 """
 
         output_format = f"""
@@ -700,8 +721,9 @@ def build_quiz_prompt(
 반드시 [교안 근거]에 있는 내용만 사용해서 학습 문제 1개를 만들어라.
 교안 근거에 없는 개념, 정의, 수식, 수치, 용어, 사례, 역할, 효과를 상상해서 추가하지 마라.
 전문용어, 고유명사, 수식, 숫자, 날짜는 교안 근거에 나온 표현을 최대한 그대로 사용하라.
-단, 한자/중국어/일본어 문자는 절대 출력하지 마라.
-원문 근거에 한자가 있으면 한글 독음이나 한국어 풀이로 바꾸어 작성하라. 예: 崗上墓는 강상묘, 樓上墓는 누상묘처럼 쓴다.
+한자/중국어/일본어 문자는 그대로 출력하지 마라. 반드시 한국어로 풀어 쓴다.
+근거에 한자 용어가 있으면 한글 독음으로 바꾸어 쓰고, 처음 나올 때만 괄호로 한자를 덧붙여도 된다. 예: 樂浪郡 → "낙랑군", 崗上墓 → "강상묘". 한자만 단독으로 남기지 마라.
+evidence_text(정답 근거)는 [교안 근거]에 실제로 있는 문장을 거의 그대로 가져와서 작성하고, 새로 지어내지 마라.
 문제, 보기, 정답, 힌트, 해설, 정답 근거는 한국어를 기본으로 작성하고, 영어는 원문 용어 보충이 필요할 때 괄호 안에서만 사용하라.
 
 [학생 요청]
@@ -739,9 +761,13 @@ def build_quiz_prompt(
 - 교안 근거에 없는 내용을 만들지 마라.
 - 학생 요청의 핵심 주제와 직접 관련된 근거가 부족하면, 넓게 추측하지 말고 검색된 근거에서 직접 확인되는 사실만 묻는다.
 - 특정 지역/시기/유적/인물의 '기원'을 묻는 문제는 근거에 기원 또는 가장 오래된 지역이 직접 드러날 때만 만든다.
-- part_summary는 1~2문장으로 작성한다.
-- evidence_text는 정답 판단에 필요한 직접 근거만 1~2문장으로 작성한다.
-- explanation은 1~2문장으로 작성한다.
+- 문제는 하나의 명확한 사실/관계만 묻는다. "다음 중 옳은 것은?"처럼 모호하게 던지지 말고, 무엇에 대해 묻는지(개념·정의·관계·절차·특징·예시 등)를 질문 문장에 분명히 드러낸다.
+- 교안 근거에 실제로 등장하는 구체적 내용(핵심 용어, 정의, 조건, 단계, 관계, 인물·연도·수치가 있으면 그것)을 문제 또는 정답에 최소 1개 이상 반드시 활용해, 자료를 읽지 않으면 풀 수 없게 한다. 자료에 없는 종류의 정보(예: 연도가 없는 자료에 연도)를 억지로 끼워 넣지 마라.
+- 오답 보기는 교안의 같은 주제 범위 안에서 그럴듯하게 만들되, 교안 근거와 명확히 어긋나야 한다. 너무 동떨어지거나 우스운 보기, 정답과 거의 같은 보기는 만들지 마라.
+- "관련이 있다", "중요하다", "영향을 주었다" 같은 두루뭉술한 표현 대신, 무엇이 어떻게 되었는지 구체적으로 서술한다.
+- part_summary는 1~2문장으로, 이 문제가 다루는 교안 파트의 핵심을 구체적으로 요약한다.
+- evidence_text는 정답 판단에 필요한 직접 근거만 1~2문장으로, 교안 근거의 실제 표현을 살려 작성한다.
+- explanation은 정답이 왜 맞는지 + 핵심 오답이 왜 틀렸는지를 구체적 근거와 함께 1~2문장으로 작성한다.
 - source_pages에는 [사용 가능한 근거 페이지] 안에 있는 숫자만 넣는다.
 - difficulty는 반드시 {level_num}으로 작성한다.
 - 출력은 반드시 JSON 객체 하나만 반환한다.
@@ -1309,7 +1335,21 @@ def get_summary_hint(file_name: str, file_summaries: Dict[str, str]) -> str:
     if not lines:
         return "해당 자료의 핵심 개념을 정리하고, 중요한 용어를 확인한다."
 
-    return " / ".join(lines)[:160]
+    hint = " / ".join(lines)
+
+    # 글자수로 무조건 자르면 단어 중간이 잘려 어색하므로,
+    # 충분히 길면 문장/구분 경계에서 자연스럽게 끊는다.
+    max_len = 280
+    if len(hint) > max_len:
+        truncated = hint[:max_len]
+        for sep in [". ", "다 ", "다.", " / ", " "]:
+            cut = truncated.rfind(sep)
+            if cut >= max_len * 0.6:
+                truncated = truncated[: cut + len(sep)].strip()
+                break
+        hint = truncated.rstrip(" /·,") + " …"
+
+    return hint
 
 
 def build_learning_roadmap_df(
@@ -1944,20 +1984,26 @@ def build_tutor_answer_prompt(
     )
 
     return f"""
-너는 한국사 강의자료 기반 AI 튜터이다.
+너는 대학 강의자료를 기반으로 학습을 돕는 AI 튜터이다.
 
 아래 규칙을 반드시 지켜라.
 - 출력은 반드시 JSON 객체 하나만 작성한다.
 - JSON의 key는 answer 하나만 사용한다.
 - answer 값에는 학생에게 보여줄 최종 한국어 답변만 넣는다.
+- 답변은 반드시 아래 [강의자료 근거]에 실제로 있는 내용만 근거로 삼는다. 근거에 없는 사실은 지어내지 말고, 근거가 부족하면 "자료에서 확인되는 범위에서는"이라고 표현한다.
 - 생각 과정, 추론 과정, 자기 점검, 근거별 분석 과정을 절대 쓰지 마라.
 - "First", "I need", "Let me", "Starting with", "Looking at", "Okay", "Wait", "Hmm", "Let's" 같은 영어 사고 표현을 절대 쓰지 마라.
-- 한자/중국어/일본어 문자는 절대 출력하지 마라.
-- 원문 근거에 한자가 있으면 한글 독음이나 한국어 풀이로 바꾸어 작성하라. 예: 鐵鐸는 철탁, 崗上墓는 강상묘, 樓上墓는 누상묘처럼 쓴다.
+- 한자/중국어/일본어 문자는 그대로 출력하지 마라. 반드시 한국어로 풀어 쓴다.
+- 근거에 한자 용어가 있으면 한글 독음으로 바꾸어 쓰고, 처음 나올 때만 괄호로 한자를 덧붙여도 된다. 예: 패수(浿水) → "패수", 樂浪郡 → "낙랑군". 한자만 단독으로 남기지 마라.
 - 한국어를 기본으로 답하고, 영어는 원어 병기가 꼭 필요한 용어에만 괄호 안에서 짧게 사용한다.
-- 자료에 없는 내용은 확정적으로 말하지 말고 "자료에서 확인되는 범위에서는"이라고 표현하라.
-- 시대 흐름 질문은 시대 순서대로 4~7문장으로 설명하라.
-- 마지막에 후속 질문을 유도하는 한 문장을 붙여라.
+
+[답변 작성 방식]
+- 핵심 내용을 먼저, 군더더기 없이 설명한다. 인사말이나 "질문 주셔서 감사합니다" 같은 불필요한 말은 쓰지 마라.
+- 내용이 여러 갈래면 "- " 로 시작하는 짧은 항목으로 정리해 읽기 쉽게 만든다. 단순한 질문이면 2~4문장으로 자연스럽게 설명한다.
+- 순서/흐름/단계가 있는 질문은 그 순서대로 정리하고, 각 단계의 핵심 내용을 근거에 나온 구체적 표현으로 언급한다.
+- "관련 있다", "중요하다" 같은 두루뭉술한 말 대신, 근거에 나온 구체적 사실로 설명한다.
+- 답변 마지막에 후속 질문을 붙이지 마라. 특히 "더 알고 싶나요?", "설명해 드릴까요?", "다음 내용을 볼까요?" 같은 의문형 문장으로 끝내지 마라. 마지막 문장은 반드시 한국어 평서문으로 마무리한다.
+- 근거 출처(파일명·페이지)는 답변 본문에 직접 쓰지 마라. 출처는 시스템이 따로 표시한다.
 
 [이전 대화]
 {history_text if history_text else "없음"}
@@ -1974,21 +2020,19 @@ def build_tutor_answer_prompt(
 
 
 def build_tutor_extra_keywords(question: str) -> List[str]:
-    q = str(question)
-    keywords = []
+    """
+    질문에서 핵심 검색어를 추출해 검색 품질을 보조한다.
+    특정 과목(한국사 등)을 가정하지 않고, 어떤 강의자료에도 동작하도록
+    질문 자체에서 의미 있는 용어만 뽑는다.
+    """
+    # tokenize_query가 불용어를 거르고 2글자 이상 토큰만 남긴다.
+    tokens = tokenize_query(question)
 
-    if any(w in q for w in ["흐름", "시대", "순서", "정리", "전체"]) or ("부터" in q and "까지" in q):
-        keywords.extend([
-            "고조선", "부여", "고구려", "백제", "신라", "가야",
-            "삼국", "통일신라", "발해", "후삼국", "후백제",
-            "후고구려", "태봉", "궁예", "견훤", "왕건", "고려"
-        ])
+    # "흐름/순서/정리" 같은 메타 단어는 검색어로서 노이즈이므로 제외한다.
+    meta_words = {"흐름", "순서", "정리", "전체", "설명", "요약", "개요", "차이", "비교"}
+    keywords = [t for t in tokens if t not in meta_words]
 
-    for term in ["고조선", "삼국", "통일신라", "발해", "후삼국", "고려", "왕건", "견훤", "궁예", "태봉"]:
-        if term in q and term not in keywords:
-            keywords.append(term)
-
-    return keywords
+    return keywords[:12]
 
 
 def clean_tutor_answer_text(text: str) -> str:
@@ -2000,13 +2044,18 @@ def clean_tutor_answer_text(text: str) -> str:
         start = text.find("{")
         end = text.rfind("}") + 1
         if start != -1 and end > start:
-            data = json.loads(text[start:end])
+            snippet = text[start:end]
+            try:
+                data = json.loads(snippet)
+            except Exception:
+                # 깨진 JSON은 repair_json으로 한 번 더 복구를 시도한다.
+                data = json.loads(repair_json(snippet))
             if isinstance(data, dict):
-                for key in ["answer", "final_answer", "response"]:
-                    if data.get(key):
+                for key in ["answer", "final_answer", "response", "output"]:
+                    if isinstance(data.get(key), str) and data.get(key).strip():
                         return sanitize_user_text(data[key])
-                if {"step", "action", "input", "output"}.intersection(data.keys()):
-                    return sanitize_user_text(data.get("output", "")) or "자료에서 확인되는 범위에서는 답변을 다시 생성해야 합니다."
+                # answer 계열이 없는 에이전트형 JSON(action/input/thought 등)은 안내문으로 대체한다.
+                return "자료에서 확인되는 범위에서는 답변을 다시 생성해야 합니다. 질문을 조금 더 구체적으로 입력해 주세요."
     except Exception:
         pass
 
@@ -2020,7 +2069,9 @@ def clean_tutor_answer_text(text: str) -> str:
     banned_prefixes = (
         "Okay", "Wait", "Hmm", "Let's", "First", "I need", "Let me", "Starting with",
         "Looking at", "The user", "The question", "The text", "This talks", "This discusses",
-        "From 근거", "근거 1", "근거 2", "근거 3", '"step"', '"action"', "{", "}"
+        "From 근거", "근거 1", "근거 2", "근거 3",
+        '"step"', '"action"', '"input"', '"output"', '"thought"', '"answer"',
+        "Action:", "Thought:", "Final Answer", "/no", "{", "}",
     )
     lines = []
     for line in text.splitlines():
@@ -2028,6 +2079,9 @@ def clean_tutor_answer_text(text: str) -> str:
         if not stripped:
             continue
         if stripped.startswith(banned_prefixes):
+            continue
+        # "key": value 형태의 JSON 파편 줄은 제거한다.
+        if re.match(r'^"[A-Za-z_]+"\s*:', stripped):
             continue
 
         korean_count = len(re.findall(r"[가-힣]", stripped))
@@ -2039,10 +2093,15 @@ def clean_tutor_answer_text(text: str) -> str:
 
     cleaned = sanitize_user_text("\n".join(lines))
 
-    # 그래도 사고 과정 흔적이 남으면 안전한 안내문으로 바꾼다.
-    thought_markers = ["First, I need", "Starting with", "Looking at", "Let me", "I need to"]
-    if any(marker in cleaned for marker in thought_markers):
+    # 그래도 사고 과정/JSON 파편 흔적이 남으면 안전한 안내문으로 바꾼다.
+    leak_markers = ["First, I need", "Starting with", "Looking at", "Let me", "I need to",
+                    '"input"', '"action"', '"output"', "/no_think", "/no"]
+    if any(marker in cleaned for marker in leak_markers):
         return "자료에서 확인되는 범위에서는 답변을 다시 생성해야 합니다. 질문을 조금 더 구체적으로 입력해 주세요."
+
+    # 한국어가 거의 없는 짧은 파편이면 정상 답변으로 보기 어렵다.
+    if len(re.findall(r"[가-힣]", cleaned)) < 4:
+        return "자료에서 확인되는 범위에서는 답변을 생성하지 못했습니다. 질문을 조금 더 구체적으로 입력해 주세요."
 
     return cleaned or "자료에서 확인되는 범위에서는 답변을 생성하지 못했습니다."
 
