@@ -91,7 +91,7 @@ app.add_middleware(
 DEFAULT_SETTINGS = {
     "collection_name": "pdf_lecture_chunks",
     "ollama_url": "http://localhost:11434/api/generate",
-    "ollama_model": "qwen3:4b",
+    "ollama_model": "qwen3:8b",
     "top_k": 4,
     "chunk_size": 800,
     "chunk_overlap": 120,
